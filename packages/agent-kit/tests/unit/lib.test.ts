@@ -53,6 +53,7 @@ describe('findPromptAgentProblems', () => {
         missingPrompt: true,
         missingTools: [],
         unknownMiddleware: [],
+        useProblems: [],
         skillProblems: [],
       },
     );
@@ -67,6 +68,7 @@ describe('findPromptAgentProblems', () => {
         missingPrompt: false,
         missingTools: ['lookupOrdr', 'quotePrise'],
         unknownMiddleware: [],
+        useProblems: [],
         skillProblems: [],
       },
     );
@@ -234,6 +236,7 @@ describe('createPromptCheck', () => {
         missingPrompt: false,
         missingTools: ['lookupOrdr'],
         unknownMiddleware: [],
+        useProblems: [],
         skillProblems: [],
         knownTools: ['lookupOrder', 'userTool'],
       },
@@ -272,6 +275,7 @@ describe('createPromptCheck', () => {
         missingPrompt: true,
         missingTools: [],
         unknownMiddleware: [],
+        useProblems: [],
         skillProblems: [],
         knownTools: [],
       },

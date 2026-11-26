@@ -29,6 +29,8 @@ export interface PromptAgentProblems {
   missingTools: string[];
   /** Names in the prompt's `use:` frontmatter that resolve to no middleware. */
   unknownMiddleware: string[];
+  /** Malformed or incomplete `use:` entries, one sentence each. */
+  useProblems: string[];
   /** Problems with the instance's skills, one sentence each. */
   skillProblems: string[];
 }
@@ -139,13 +141,59 @@ const PromptMetadataSchema = z.object({
   prompt: z.object({ tools: z.array(z.string()).optional() }),
 });
 
-const PromptMiddlewareSchema = z.object({
+const PromptUseSchema = z.object({
   prompt: z.object({
-    use: z
-      .array(z.object({ name: z.string(), config: z.unknown().optional() }))
-      .optional(),
+    raw: z.object({ use: z.unknown() }).partial().optional(),
+    use: z.unknown(),
   }),
 });
+
+const UseEntrySchema = z.union([
+  z.string().transform((name) => ({ name, config: undefined })),
+  z.object({ name: z.string(), config: z.unknown().optional() }),
+]);
+
+const FallbackConfigSchema = z.object({
+  models: z.array(z.object({ name: z.string() })).min(1),
+});
+
+interface UseEntry {
+  name: string;
+  config?: unknown;
+}
+
+// The raw list, because Genkit drops malformed entries from the normalized one.
+function parseUse(metadata: unknown): {
+  entries: UseEntry[];
+  problems: string[];
+} {
+  const parsed = PromptUseSchema.safeParse(metadata);
+  if (!parsed.success) return { entries: [], problems: [] };
+  const { raw, use } = parsed.data.prompt;
+  const list = raw && 'use' in raw ? raw.use : use;
+  if (!Array.isArray(list)) return { entries: [], problems: [] };
+  const entries: UseEntry[] = [];
+  const problems: string[] = [];
+  for (const item of list) {
+    const entry = UseEntrySchema.safeParse(item);
+    if (entry.success) {
+      entries.push(entry.data);
+    } else {
+      problems.push(
+        `entry ${JSON.stringify(item)} is not a middleware name or { name, config }`,
+      );
+    }
+  }
+  for (const entry of entries) {
+    if (
+      entry.name === 'fallback' &&
+      !FallbackConfigSchema.safeParse(entry.config).success
+    ) {
+      problems.push('fallback needs config.models with at least one model');
+    }
+  }
+  return { entries, problems };
+}
 
 const SkillsConfigSchema = z.object({
   skillPaths: z
@@ -190,13 +238,15 @@ export async function findPromptAgentProblems(
       missingPrompt: true,
       missingTools: [],
       unknownMiddleware: [],
+      useProblems: [],
       skillProblems: [],
     };
   }
   const metadata = PromptMetadataSchema.safeParse(prompt.__action.metadata);
   const tools = metadata.success ? (metadata.data.prompt.tools ?? []) : [];
-  const middleware = PromptMiddlewareSchema.safeParse(prompt.__action.metadata);
-  const use = middleware.success ? (middleware.data.prompt.use ?? []) : [];
+  const { entries: use, problems: useProblems } = parseUse(
+    prompt.__action.metadata,
+  );
   const missingTools: string[] = [];
   for (const name of tools) {
     if (!(await resolvesTool(registry, name))) missingTools.push(name);
@@ -214,8 +264,15 @@ export async function findPromptAgentProblems(
   );
   return missingTools.length > 0 ||
     unknownMiddleware.length > 0 ||
+    useProblems.length > 0 ||
     skillProblems.length > 0
-    ? { missingPrompt: false, missingTools, unknownMiddleware, skillProblems }
+    ? {
+        missingPrompt: false,
+        missingTools,
+        unknownMiddleware,
+        useProblems,
+        skillProblems,
+      }
     : undefined;
 }
 
@@ -281,6 +338,9 @@ async function findSkillProblems(
       `the skills config in ${prompt} must be { skillPaths: [<directory>, ...] }`,
     ];
   }
+  if (config.data.skillPaths?.length === 0) {
+    return [`the skillPaths list in ${prompt} is empty`];
+  }
   const problems: string[] = [];
   for (const skillPath of config.data.skillPaths ?? [defaultDir]) {
     const dir = path.resolve(sourceDir, skillPath);
@@ -298,6 +358,10 @@ async function findSkillProblems(
       );
       continue;
     }
+    if (skillDirs.length === 0) {
+      problems.push(`${shown}/ has no skills`);
+      continue;
+    }
     for (const name of skillDirs) {
       const file = `${shown}/${name}/SKILL.md`;
       let content: string;
@@ -308,8 +372,13 @@ async function findSkillProblems(
         problems.push(`${file} does not exist`);
         continue;
       }
-      if (!skillDescription(content)) {
+      const description = skillDescription(content);
+      if (!description) {
         problems.push(`${file} has no description in its frontmatter`);
+      } else if (/^["'|>]/.test(description)) {
+        problems.push(
+          `${file} has a quoted or multi-line description: write it plain, unquoted, on one line`,
+        );
       }
     }
   }
@@ -336,6 +405,11 @@ function describeProblems(
   if (problems.unknownMiddleware.length > 0) {
     sentences.push(
       `${instance} uses middleware that is not available: ${problems.unknownMiddleware.join(', ')}. Fix the use: list in ${prompt}. The kit provides ${KIT_MIDDLEWARE.join(', ')}.`,
+    );
+  }
+  if (problems.useProblems.length > 0) {
+    sentences.push(
+      `${instance} has use: problems: ${problems.useProblems.join('; ')}. Fix the use: list in ${prompt}.`,
     );
   }
   if (problems.skillProblems.length > 0) {

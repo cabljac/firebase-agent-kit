@@ -261,12 +261,14 @@ describe('findPromptAgentProblems for middleware and skills', () => {
   const problemsOf = (
     overrides: Partial<{
       unknownMiddleware: string[];
+      useProblems: string[];
       skillProblems: string[];
     }>,
   ) => ({
     missingPrompt: false,
     missingTools: [],
     unknownMiddleware: [],
+    useProblems: [],
     skillProblems: [],
     ...overrides,
   });
@@ -278,7 +280,11 @@ describe('findPromptAgentProblems for middleware and skills', () => {
       'skills/support/README.md': 'ignored',
     });
     const { ai, definePrompt } = kit(dir);
-    definePrompt([{ name: 'skills' }, { name: 'retry' }, { name: 'fallback' }]);
+    definePrompt([
+      { name: 'skills' },
+      { name: 'retry' },
+      { name: 'fallback', config: { models: [{ name: 'test/scripted' }] } },
+    ]);
     await expect(
       findPromptAgentProblems(ai.registry, 'support', dir),
     ).resolves.toBeUndefined();
@@ -403,13 +409,97 @@ describe('findPromptAgentProblems for middleware and skills', () => {
     );
   });
 
+  test('reports an empty skills folder and an empty skillPaths list', async () => {
+    const dir = await sourceDir({ 'skills/support/notes.md': 'not a skill' });
+    const { ai, definePrompt } = kit(dir);
+    definePrompt([{ name: 'skills' }]);
+    definePrompt([{ name: 'skills', config: { skillPaths: [] } }], 'sales');
+    await expect(
+      findPromptAgentProblems(ai.registry, 'support', dir),
+    ).resolves.toEqual(
+      problemsOf({ skillProblems: ['skills/support/ has no skills'] }),
+    );
+    await expect(
+      findPromptAgentProblems(ai.registry, 'sales', dir),
+    ).resolves.toEqual(
+      problemsOf({
+        skillProblems: ['the skillPaths list in prompts/sales.prompt is empty'],
+      }),
+    );
+  });
+
+  test('reports a quoted or multi-line description', async () => {
+    const dir = await sourceDir({
+      'skills/support/refunds/SKILL.md': refundsSkill,
+      'skills/support/double/SKILL.md': '---\ndescription: "Quoted."\n---\n',
+      'skills/support/single/SKILL.md': "---\ndescription: 'Quoted.'\n---\n",
+      'skills/support/folded/SKILL.md':
+        '---\ndescription: >-\n  Folded text.\n---\n',
+      'skills/support/literal/SKILL.md': '---\ndescription: |\n  Text.\n---\n',
+    });
+    const { ai, definePrompt } = kit(dir);
+    definePrompt([{ name: 'skills' }]);
+    const problem = (name: string) =>
+      `skills/support/${name}/SKILL.md has a quoted or multi-line description: write it plain, unquoted, on one line`;
+    await expect(
+      findPromptAgentProblems(ai.registry, 'support', dir),
+    ).resolves.toEqual(
+      problemsOf({
+        skillProblems: ['double', 'folded', 'literal', 'single'].map(problem),
+      }),
+    );
+  });
+
+  test('reports each malformed use: entry and still checks the others', async () => {
+    const dir = await sourceDir({
+      'prompts/support.prompt':
+        '---\nmodel: test/scripted\nuse: [skills, 42, { config: {} }, { name: 7 }, retyr]\n---\nhello\n',
+    });
+    const { ai } = kit(dir);
+    await expect(
+      findPromptAgentProblems(ai.registry, 'support', dir),
+    ).resolves.toEqual(
+      problemsOf({
+        unknownMiddleware: ['retyr'],
+        useProblems: [
+          'entry 42 is not a middleware name or { name, config }',
+          'entry {"config":{}} is not a middleware name or { name, config }',
+          'entry {"name":7} is not a middleware name or { name, config }',
+        ],
+        skillProblems: [
+          'prompts/support.prompt lists skills in use:, but skills/support/ does not exist',
+        ],
+      }),
+    );
+  });
+
+  test.each([
+    ['a bare fallback', [{ name: 'fallback' }]],
+    ['an empty models list', [{ name: 'fallback', config: { models: [] } }]],
+  ])('reports fallback with %s', async (_label, use) => {
+    const dir = await sourceDir();
+    const { ai, definePrompt } = kit(dir);
+    definePrompt(use);
+    await expect(
+      findPromptAgentProblems(ai.registry, 'support', dir),
+    ).resolves.toEqual(
+      problemsOf({
+        useProblems: ['fallback needs config.models with at least one model'],
+      }),
+    );
+  });
+
   test('the prompt check puts every problem in the emulator error message', async () => {
     vi.stubEnv('FUNCTIONS_EMULATOR', 'true');
     const dir = await sourceDir({
       'skills/support/refunds/SKILL.md': '---\n---\n',
     });
     const { ai, definePrompt } = kit(dir);
-    definePrompt([{ name: 'skills' }, { name: 'filesystem' }]);
+    definePrompt([
+      { name: 'skills' },
+      { name: 'filesystem' },
+      { name: 'fallback' },
+    ]);
     const check = createPromptCheck({
       registry: ai.registry,
       instanceId: 'support',
@@ -419,13 +509,14 @@ describe('findPromptAgentProblems for middleware and skills', () => {
     await expect(check()).rejects.toMatchObject({
       status: 'FAILED_PRECONDITION',
       originalMessage:
-        'Agent kit instance "support" uses middleware that is not available: filesystem. Fix the use: list in prompts/support.prompt. The kit provides skills, retry, fallback. Agent kit instance "support" has skill problems: skills/support/refunds/SKILL.md has no description in its frontmatter.',
+        'Agent kit instance "support" uses middleware that is not available: filesystem. Fix the use: list in prompts/support.prompt. The kit provides skills, retry, fallback. Agent kit instance "support" has use: problems: fallback needs config.models with at least one model. Fix the use: list in prompts/support.prompt. Agent kit instance "support" has skill problems: skills/support/refunds/SKILL.md has no description in its frontmatter.',
     });
     expect(logger.error).toHaveBeenCalledWith(expect.any(String), {
       instanceId: 'support',
       missingPrompt: false,
       missingTools: [],
       unknownMiddleware: ['filesystem'],
+      useProblems: ['fallback needs config.models with at least one model'],
       skillProblems: [
         'skills/support/refunds/SKILL.md has no description in its frontmatter',
       ],

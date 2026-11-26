@@ -184,7 +184,7 @@ source/
     shipping/SKILL.md
 ```
 
-The directory name is the skill name. `SKILL.md` starts with YAML frontmatter that has a one-line `description`. The model reads the description to decide when to load the skill:
+The directory name is the skill name. `SKILL.md` starts with YAML frontmatter that has a `description`. Write the description plain, unquoted and on one line. The model reads the description to decide when to load the skill:
 
 ```
 ---
@@ -210,8 +210,8 @@ On each turn, the kit adds a `<skills>` block to the system prompt, with the nam
 
 - Skills are text only. A skill grants no tools. The model can call only `use_skill` and the tools in the `tools:` list, whatever a skill says.
 - The model can repeat the text of a skill to the user. Do not put secrets in a `SKILL.md` file.
-- An instance reads only its own `skills/<instance id>/` directory. The kit ignores directories whose names start with `.`.
-- The skill files deploy with the function source. To change a skill, edit the file and deploy again.
+- By default, an instance reads only its own `skills/<instance id>/` directory. The kit ignores directories whose names start with `.`.
+- The kit reads the skill files from the deployed function source directory. To change a skill, edit the file and deploy again. The kit skips skill directories that are symbolic links, and it checks paths by name only, without following links.
 
 To read skills from other directories, set `skillPaths`. Each path is relative to the function source directory and must be inside it:
 
@@ -233,7 +233,7 @@ use:
     config: { maxRetries: 2, initialDelayMs: 500 }
 ```
 
-`fallback` calls the next model in `models` when the model fails with one of the statuses above, `NOT_FOUND` or `UNIMPLEMENTED`:
+`fallback` calls the next model in `models` when the model fails with one of the statuses above, `NOT_FOUND` or `UNIMPLEMENTED`. It needs `models` with at least one model, so a bare `fallback` fails the configuration checks:
 
 ```
 ---
@@ -337,14 +337,15 @@ An empty list makes firebase-functions log a warning on every request, except in
 
 ### Configuration checks
 
-The kit checks that `prompts/<instance id>.prompt` exists, that every name in its `tools:` list is defined, that every name in its `use:` list is `skills`, `retry` or `fallback`, and that `ENFORCE_APP_CHECK` is exactly `true` or `false`. firebase-functions reads any other value as `false`, which would turn App Check off without a sign. If a check fails, the kit logs the details, with the names of the tools you defined, through the `firebase-functions` logger.
+The kit checks that `prompts/<instance id>.prompt` exists, that every name in its `tools:` list is defined, that every entry in its `use:` list is a name or `{ name, config }`, that every name is `skills`, `retry` or `fallback`, that `fallback` has at least one model, and that `ENFORCE_APP_CHECK` is exactly `true` or `false`. firebase-functions reads any other value as `false`, which would turn App Check off without a sign. If a check fails, the kit logs the details, with the names of the tools you defined, through the `firebase-functions` logger.
 
 For [skills](#skills), the kit also checks that:
 
 - `skills/<instance id>/` exists when the `use:` list names `skills` without `skillPaths`.
 - `skills/<instance id>/` does not exist when the `use:` list does not name `skills`.
-- Each `skillPaths` entry is a directory inside the function source directory.
-- Each skill directory has a `SKILL.md` file, and its frontmatter has a `description:` line that is not empty.
+- `skillPaths` is not an empty list, and each entry is a directory inside the function source directory.
+- Each skills directory has at least one skill.
+- Each skill directory has a `SKILL.md` file, and its frontmatter has a `description:` line that is not empty. The description is plain text on that line, not quoted and not a `|` or `>` block.
 
 - **At cold start.** When an instance starts, the kit runs the check once in the background and logs any problem. A failed check does not stop the instance. The check does not run during deploy discovery, so a deploy does not read the skill files.
 - **On each request.** Until the check passes, every request runs it again, on every route. A failed check answers 400 `FAILED_PRECONDITION`. Without the check, Genkit would return HTTP 200 with a failed turn and log nothing, and with an invalid `ENFORCE_APP_CHECK` the `/getSnapshot`, `/waitForSnapshot` and `/abort` routes would run without App Check.
