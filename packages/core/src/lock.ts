@@ -3,7 +3,7 @@ import { type Firestore, getFirestore } from 'firebase-admin/firestore';
 import { logger } from 'firebase-functions/logger';
 import type { FirestoreTurnLockOptions, TurnLease, TurnLock } from './types.js';
 
-const DEFAULT_COLLECTION = 'genkit-agent-locks';
+const DEFAULT_COLLECTION = 'agent-kit-locks';
 
 /** A {@link TurnLock} backed by one Firestore document per key. */
 export class FirestoreTurnLock implements TurnLock {

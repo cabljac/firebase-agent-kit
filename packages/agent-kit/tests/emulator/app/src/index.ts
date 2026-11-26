@@ -58,6 +58,10 @@ ai.defineModel({ name: 'test/scripted' }, async (request) => {
         .trim() ?? '',
     );
   }
+  if (text === 'count') {
+    const users = messages.filter((m) => m.role === 'user').length;
+    return reply(`user messages: ${users}`);
+  }
   if (text === 'tools') {
     return reply(
       (request.tools ?? [])

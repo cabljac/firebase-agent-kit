@@ -7,6 +7,16 @@ import { remoteAgent } from 'genkit/beta/client';
 import { describe, expect, test } from 'vitest';
 import { defined, signUp } from '../../../core/tests/emulator/helpers.js';
 
+const sha256 = (s: string) => createHash('sha256').update(s).digest('hex');
+const userKey = (instanceId: string, uid: string) =>
+  sha256(JSON.stringify([instanceId, uid]));
+const lockId = (uid: string, sessionId: string) =>
+  sha256(`${sha256(JSON.stringify([null, uid]))}:${sessionId}`);
+
+let kitDb: FirebaseFirestore.Firestore | undefined;
+const db = () =>
+  (kitDb ??= getFirestore(initializeApp({ projectId: 'demo-test' }, 'kit')));
+
 const instanceUrl = (instanceId: string) =>
   `http://127.0.0.1:5001/demo-test/us-central1/kit-${instanceId}-agent`;
 
@@ -16,19 +26,29 @@ const client = (instanceId: string, idToken: string) =>
     headers: { Authorization: `Bearer ${idToken}` },
   });
 
-async function postTurn(instanceId: string, text: string, idToken: string) {
-  const res = await fetch(instanceUrl(instanceId), {
+async function postRoute(
+  instanceId: string,
+  path: string,
+  body: unknown,
+  idToken: string,
+) {
+  const res = await fetch(`${instanceUrl(instanceId)}${path}`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${idToken}`,
     },
-    body: JSON.stringify({
-      data: { message: { role: 'user', content: [{ text }] } },
-    }),
+    body: JSON.stringify(body),
   });
   return { status: res.status, body: await res.json() };
 }
+
+const userMessage = (text: string) => ({
+  message: { role: 'user', content: [{ text }] },
+});
+
+const postTurn = (instanceId: string, text: string, idToken: string) =>
+  postRoute(instanceId, '', { data: userMessage(text) }, idToken);
 
 const problems: Record<string, string> = {
   typo: 'Agent kit instance "typo" lists tools that are not defined: lookupOrdr. Fix the tools: list in prompts/typo.prompt or define the tools with ai.defineTool.',
@@ -161,6 +181,157 @@ describe('firebase-agent-kit instances', () => {
   });
 });
 
+describe('firebase-agent-kit sessions per instance', () => {
+  type SupportSession = Awaited<ReturnType<typeof startSupportSession>>;
+
+  async function startSupportSession() {
+    const user = await signUp();
+    const chat = client('support', user.idToken).chat();
+    const first = await chat.send('count');
+    expect(first.text).toBe('user messages: 1');
+    const snapshotId = defined(first.snapshotId, 'snapshotId');
+    return {
+      user,
+      sessionId: defined(chat.sessionId, 'sessionId'),
+      snapshotId,
+      snapshot: await client('support', user.idToken).getSnapshot(snapshotId),
+    };
+  }
+
+  async function expectSupportResumes(
+    idToken: string,
+    { sessionId, snapshotId, snapshot }: SupportSession,
+  ) {
+    expect(await client('support', idToken).getSnapshot(snapshotId)).toEqual(
+      snapshot,
+    );
+    const resumed = await client('support', idToken).loadChat({ sessionId });
+    expect((await resumed.send('count')).text).toBe('user messages: 2');
+  }
+
+  test('stores sessions under the key of the uid in the instance scope', async () => {
+    const { user, sessionId, snapshotId } = await startSupportSession();
+    const prefix = userKey('support', user.uid);
+    const snapshot = await db()
+      .doc(`agent-kit-sessions/${prefix}/snapshots/${snapshotId}`)
+      .get();
+    expect(snapshot.exists).toBe(true);
+    const pointer = await db()
+      .doc(`agent-kit-sessions-pointers/${prefix}/pointers/${sessionId}`)
+      .get();
+    expect(pointer.exists).toBe(true);
+    const shards = await db()
+      .collection(`agent-kit-sessions-shards/${prefix}/shards`)
+      .limit(1)
+      .get();
+    expect(shards.size).toBe(1);
+  });
+
+  test.each([
+    ['/getSnapshot', 'snapshotId'],
+    ['/getSnapshot', 'sessionId'],
+    ['/waitForSnapshot', 'snapshotId'],
+  ] as const)(
+    "sales answers 500 INTERNAL when the same user calls %s with a support session's %s",
+    async (path, idName) => {
+      const session = await startSupportSession();
+      const { user, sessionId, snapshotId } = session;
+      const ids = { sessionId, snapshotId };
+      expect(
+        await postRoute(
+          'sales',
+          path,
+          { data: { [idName]: ids[idName] } },
+          user.idToken,
+        ),
+      ).toEqual({
+        status: 500,
+        body: { status: 'INTERNAL', message: 'Internal Error' },
+      });
+      await expectSupportResumes(user.idToken, session);
+    },
+  );
+
+  test("sales fails the turn when the same user resumes a support session's snapshotId", async () => {
+    const session = await startSupportSession();
+    const { user, snapshotId } = session;
+    await expect(
+      client('sales', user.idToken).chat({ snapshotId }).send('count'),
+    ).rejects.toMatchObject({
+      name: 'AgentError',
+      status: 'NOT_FOUND',
+      message: `Snapshot ${snapshotId} not found`,
+    });
+    await expectSupportResumes(user.idToken, session);
+  });
+
+  test("sales starts a fresh session when the same user sends a support session's sessionId", async () => {
+    const session = await startSupportSession();
+    const { user, sessionId } = session;
+    const res = await postRoute(
+      'sales',
+      '',
+      { data: userMessage('count'), init: { sessionId } },
+      user.idToken,
+    );
+    expect(res.status).toBe(200);
+    expect(res.body.result).toMatchObject({
+      message: { content: [{ text: 'user messages: 1' }] },
+      sessionId,
+    });
+    await expectSupportResumes(user.idToken, session);
+  });
+
+  test("sales answers /abort with no status when the same user sends a support session's snapshotId", async () => {
+    const session = await startSupportSession();
+    const { user, snapshotId } = session;
+    expect(
+      await postRoute(
+        'sales',
+        '/abort',
+        { data: { snapshotId } },
+        user.idToken,
+      ),
+    ).toEqual({ status: 200, body: { result: { snapshotId } } });
+    await expectSupportResumes(user.idToken, session);
+  });
+
+  test('a turn on one instance holds the lock of the same user and session id on every instance', async () => {
+    const { uid, idToken } = await signUp();
+    const chat = client('sales', idToken).chat();
+    await chat.send('count');
+    const sessionId = defined(chat.sessionId, 'sessionId');
+    const salesLock = db()
+      .collection('agent-kit-locks')
+      .doc(lockId(uid, sessionId));
+
+    const slow = chat.send('wait 3000');
+    let settled = false;
+    const markSettled = () => {
+      settled = true;
+    };
+    slow.then(markSettled, markSettled);
+    let held = false;
+    while (!held && !settled) held = (await salesLock.get()).exists;
+    expect(held).toBe(true);
+
+    const support = await postRoute(
+      'support',
+      '',
+      { data: userMessage('count'), init: { sessionId } },
+      idToken,
+    );
+    expect(support).toEqual({
+      status: 409,
+      body: {
+        status: 'ABORTED',
+        message: 'Another turn is running for this session.',
+      },
+    });
+    expect((await slow).text).toBe('waited 3000');
+  });
+});
+
 describe('firebase-agent-kit params from config-<instance>/.env.<projectId>', () => {
   test('a non-empty JSON CORS_ORIGINS turns CORS on', async () => {
     const res = await preflight('support', 'https://app.example.com');
@@ -202,11 +373,9 @@ describe('firebase-agent-kit params from config-<instance>/.env.<projectId>', ()
     const chat = client('sales', idToken).chat();
     await chat.send('prompt');
     const sessionId = defined(chat.sessionId, 'sessionId');
-    const lockId = createHash('sha256')
-      .update(`${uid}:${sessionId}`)
-      .digest('hex');
-    const db = getFirestore(initializeApp({ projectId: 'demo-test' }, 'kit'));
-    const lockRef = db.collection('genkit-agent-locks').doc(lockId);
+    const lockRef = db()
+      .collection('agent-kit-locks')
+      .doc(lockId(uid, sessionId));
 
     const sentAt = Date.now();
     const turn = chat.send('wait 3000');

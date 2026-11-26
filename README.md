@@ -9,7 +9,7 @@ Serve a multi-user [Genkit](https://genkit.dev) agent from Firebase Cloud Functi
 What you get on every instance:
 
 - **Auth on every route.** Every route needs a Firebase Auth ID token, including the snapshot and abort routes. App Check is one param away.
-- **Per-user sessions.** Sessions live in Firestore, keyed by the user. One user cannot read, resume or abort the session of another user.
+- **Per-user sessions.** Sessions live in Firestore, keyed by the instance and the user. One user cannot read, resume or abort the session of another user, and one instance cannot load the session of another instance.
 - **One turn at a time.** A per-session lock gives a second, concurrent turn a clean 409 instead of a race on the same history.
 - **Streaming and interrupts.** The stock `remoteAgent` client streams replies and answers tool approvals.
 - **Gemini on Vertex AI with no API key.** Model calls use the function's service account.
