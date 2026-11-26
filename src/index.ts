@@ -1,15 +1,13 @@
-export {
-  assertNotDetach,
-  requireUid,
-  resolveLockKey,
-  sendError,
-} from './guards.js';
+export { isAuthedContext, requireUid } from './guards.js';
 export { onAgentRequest } from './handler.js';
 export { FirestoreTurnLock } from './lock.js';
 export { createUserScopedStore } from './store.js';
 export type {
-  AgentRequestErrorStatus,
+  AgentRequestContext,
   AgentRequestOptions,
+  AgentRoute,
+  AuthorizeRequest,
+  BeforeTurnRequest,
   FirestoreTurnLockOptions,
   TurnLease,
   TurnLock,

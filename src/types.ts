@@ -1,6 +1,8 @@
+import type { FirebaseContext } from '@genkit-ai/firebase/context';
 import type { Firestore } from 'firebase-admin/firestore';
+import type { Expression } from 'firebase-functions/params';
 import type { HttpsOptions } from 'firebase-functions/v2/https';
-import type { ActionContext, SessionStore } from 'genkit/beta';
+import type { AgentInit, AgentInput } from 'genkit/beta';
 
 /** Options for {@link createUserScopedStore}. */
 export interface UserScopedStoreOptions {
@@ -35,37 +37,63 @@ export interface FirestoreTurnLockOptions {
   collection?: string;
   /** Firestore instance. Defaults to `getFirestore()` on the default app. */
   firestore?: Firestore;
-  /** Clock in epoch ms, injectable for tests. Defaults to `Date.now`. */
-  now?: () => number;
+}
+
+/** The context of a request that passed Firebase Auth. */
+export type AgentRequestContext = FirebaseContext & {
+  auth: NonNullable<FirebaseContext['auth']>;
+};
+
+/** A route that {@link onAgentRequest} serves. `turn` is the main route. */
+export type AgentRoute = 'turn' | 'getSnapshot' | 'waitForSnapshot' | 'abort';
+
+/** Argument of the {@link AgentRequestOptions.authorize} hook. */
+export interface AuthorizeRequest {
+  /** The route of this request. */
+  route: AgentRoute;
+  /** The authenticated request context. */
+  context: AgentRequestContext;
+}
+
+/** Argument of the {@link AgentRequestOptions.beforeTurn} hook. */
+export interface BeforeTurnRequest {
+  /** The authenticated request context. */
+  context: AgentRequestContext;
+  /** The turn input. */
+  input: AgentInput;
+  /** The session init, or `undefined` when the request has none. */
+  init: AgentInit | undefined;
 }
 
 /** Options for {@link onAgentRequest}. */
-export interface AgentRequestOptions<S = unknown> {
+export interface AgentRequestOptions {
   /**
-   * The same store instance passed to the agent's `store` config. Used to
-   * resolve a `snapshotId` to its session for turn locking.
+   * Passed through to `onRequest`. Set `cors` here for browser clients. The
+   * function's timeout (`timeoutSeconds` here, else from `setGlobalOptions`,
+   * else 60 seconds) plus 30 seconds sizes the lock lease.
    */
-  store: SessionStore<S>;
-  /** Passed through to `onRequest`. `timeoutSeconds` also sizes the lock lease. */
   httpsOptions?: HttpsOptions;
-  /** Turn lock. Defaults to a {@link FirestoreTurnLock}; `false` disables locking. */
-  lock?: TurnLock | false;
-  /** Reject requests without a valid App Check token. Defaults to `false`. */
-  enforceAppCheck?: boolean;
   /**
-   * Runs on each turn request after authentication and before the turn lock.
-   * Throw a `GenkitError` to reject the turn with that status.
+   * Turn lock. Defaults to a {@link FirestoreTurnLock}; `false` disables
+   * locking, which is safe only when turns on one session never overlap.
    */
-  beforeTurn?: (context: ActionContext) => void | Promise<void>;
+  lock?: TurnLock | false;
+  /**
+   * Reject requests without a valid App Check token. Defaults to `false`. A
+   * params expression (for example `defineBoolean('ENFORCE_APP_CHECK')`) is
+   * read on each request.
+   */
+  enforceAppCheck?: boolean | Expression<boolean>;
+  /**
+   * Runs on every route after authentication and App Check. Throw a
+   * `GenkitError` to reject the request with that status; any other error
+   * answers 500.
+   */
+  authorize?: (request: AuthorizeRequest) => void | Promise<void>;
+  /**
+   * Runs on each turn after `authorize` and before the turn lock. Throw a
+   * `GenkitError` to reject the turn with that status; any other error
+   * answers 500.
+   */
+  beforeTurn?: (turn: BeforeTurnRequest) => void | Promise<void>;
 }
-
-/**
- * Status values this library returns, as Genkit `StatusName`s. Each maps to an
- * HTTP status through `GenkitError`.
- */
-export type AgentRequestErrorStatus =
-  | 'UNAUTHENTICATED'
-  | 'PERMISSION_DENIED'
-  | 'INVALID_ARGUMENT'
-  | 'FAILED_PRECONDITION'
-  | 'ABORTED';

@@ -1,6 +1,6 @@
 import type { Response } from 'express';
 import { GenkitError } from 'genkit';
-import type { ActionContext, SessionSnapshot, SessionStore } from 'genkit/beta';
+import type { ActionContext, Agent, SessionSnapshot } from 'genkit/beta';
 import { describe, expect, test, vi } from 'vitest';
 
 vi.mock('firebase-functions', () => ({ logger: { error: vi.fn() } }));
@@ -8,25 +8,23 @@ vi.mock('firebase-functions', () => ({ logger: { error: vi.fn() } }));
 import { logger } from 'firebase-functions';
 import {
   assertNotDetach,
+  isAuthedContext,
   requireUid,
   resolveLockKey,
   sendError,
 } from '../../src/guards.js';
 
-function fakeStore(snapshots: Record<string, SessionSnapshot>) {
-  const getSnapshot = vi.fn(
-    async (opts: {
-      snapshotId?: string;
-    }): Promise<SessionSnapshot | undefined> =>
+function fakeAgent(snapshots: Record<string, SessionSnapshot>) {
+  const getSnapshotData = vi.fn(
+    async (
+      opts: Parameters<Agent['getSnapshotData']>[0],
+    ): Promise<SessionSnapshot | undefined> =>
       opts.snapshotId ? snapshots[opts.snapshotId] : undefined,
   );
-  const store: SessionStore = {
-    getSnapshot,
-    saveSnapshot: async () => {
-      throw new Error('not used');
-    },
+  const agent: Pick<Agent, 'getSnapshotData'> = {
+    getSnapshotData,
   };
-  return { store, getSnapshot };
+  return { agent, getSnapshotData };
 }
 
 const ctx: ActionContext = { auth: { uid: 'u1' } };
@@ -77,69 +75,89 @@ describe('requireUid', () => {
   });
 });
 
+describe('isAuthedContext', () => {
+  test('accepts Firebase Auth data with a uid', () => {
+    expect(
+      isAuthedContext({ auth: { uid: 'u1', token: {}, rawToken: 't' } }),
+    ).toBe(true);
+  });
+
+  test.each([
+    [{}],
+    [{ auth: { uid: 'u1' } }],
+    [{ auth: { uid: '', token: {}, rawToken: 't' } }],
+    [{ auth: { uid: 'u1', token: {} } }],
+    [{ auth: { uid: 'u1', rawToken: 't' } }],
+  ])('rejects %j', (c) => {
+    expect(isAuthedContext(c)).toBe(false);
+  });
+});
+
 describe('resolveLockKey', () => {
-  test('uses sessionId directly without reading the store', async () => {
-    const { store, getSnapshot } = fakeStore({});
-    await expect(resolveLockKey({ sessionId: 's1' }, store, ctx)).resolves.toBe(
+  test('uses sessionId directly without reading a snapshot', async () => {
+    const { agent, getSnapshotData } = fakeAgent({});
+    await expect(resolveLockKey({ sessionId: 's1' }, agent, ctx)).resolves.toBe(
       'u1:s1',
     );
-    expect(getSnapshot).not.toHaveBeenCalled();
+    expect(getSnapshotData).not.toHaveBeenCalled();
   });
 
   test('resolves snapshotId first when both ids are present', async () => {
-    const { store, getSnapshot } = fakeStore({
+    const { agent, getSnapshotData } = fakeAgent({
       snap: { snapshotId: 'snap', sessionId: 's1' } as SessionSnapshot,
     });
     await expect(
-      resolveLockKey({ sessionId: 's1', snapshotId: 'snap' }, store, ctx),
+      resolveLockKey({ sessionId: 's1', snapshotId: 'snap' }, agent, ctx),
     ).resolves.toBe('u1:s1');
-    expect(getSnapshot).toHaveBeenCalledWith(
+    expect(getSnapshotData).toHaveBeenCalledWith(
       expect.objectContaining({ snapshotId: 'snap' }),
     );
   });
 
   test('ignores an empty snapshotId next to a sessionId', async () => {
-    const { store, getSnapshot } = fakeStore({});
+    const { agent, getSnapshotData } = fakeAgent({});
     await expect(
-      resolveLockKey({ sessionId: 's1', snapshotId: '' }, store, ctx),
+      resolveLockKey({ sessionId: 's1', snapshotId: '' }, agent, ctx),
     ).resolves.toBe('u1:s1');
-    expect(getSnapshot).not.toHaveBeenCalled();
+    expect(getSnapshotData).not.toHaveBeenCalled();
   });
 
   test('ignores an empty sessionId next to a snapshotId', async () => {
-    const { store } = fakeStore({
+    const { agent } = fakeAgent({
       snap: { snapshotId: 'snap', sessionId: 's2' } as SessionSnapshot,
     });
     await expect(
-      resolveLockKey({ sessionId: '', snapshotId: 'snap' }, store, ctx),
+      resolveLockKey({ sessionId: '', snapshotId: 'snap' }, agent, ctx),
     ).resolves.toBe('u1:s2');
   });
 
-  test('resolves snapshotId through the store with the context', async () => {
-    const { store, getSnapshot } = fakeStore({
+  test("reads snapshotId metadata through the agent's store with the context", async () => {
+    const { agent, getSnapshotData } = fakeAgent({
       snap: { snapshotId: 'snap', sessionId: 's2' } as SessionSnapshot,
     });
     await expect(
-      resolveLockKey({ snapshotId: 'snap' }, store, ctx),
+      resolveLockKey({ snapshotId: 'snap' }, agent, ctx),
     ).resolves.toBe('u1:s2');
-    expect(getSnapshot).toHaveBeenCalledWith(
-      expect.objectContaining({ snapshotId: 'snap', context: ctx }),
-    );
+    expect(getSnapshotData).toHaveBeenCalledWith({
+      snapshotId: 'snap',
+      metadataOnly: true,
+      context: ctx,
+    });
   });
 
   test('returns undefined for an unknown snapshot', async () => {
-    const { store } = fakeStore({});
+    const { agent } = fakeAgent({});
     await expect(
-      resolveLockKey({ snapshotId: 'nope' }, store, ctx),
+      resolveLockKey({ snapshotId: 'nope' }, agent, ctx),
     ).resolves.toBeUndefined();
   });
 
   test('returns undefined for a snapshot with no session', async () => {
-    const { store } = fakeStore({
+    const { agent } = fakeAgent({
       snap: { snapshotId: 'snap' } as SessionSnapshot,
     });
     await expect(
-      resolveLockKey({ snapshotId: 'snap' }, store, ctx),
+      resolveLockKey({ snapshotId: 'snap' }, agent, ctx),
     ).resolves.toBeUndefined();
   });
 
@@ -151,14 +169,14 @@ describe('resolveLockKey', () => {
     [{ sessionId: 5 }],
     [{ sessionId: '', snapshotId: '' }],
   ])('returns undefined for init %j', async (init) => {
-    const { store } = fakeStore({});
-    await expect(resolveLockKey(init, store, ctx)).resolves.toBeUndefined();
+    const { agent } = fakeAgent({});
+    await expect(resolveLockKey(init, agent, ctx)).resolves.toBeUndefined();
   });
 
   test('throws UNAUTHENTICATED without a uid', async () => {
-    const { store } = fakeStore({});
+    const { agent } = fakeAgent({});
     await expect(
-      resolveLockKey({ sessionId: 's' }, store, {}),
+      resolveLockKey({ sessionId: 's' }, agent, {}),
     ).rejects.toMatchObject({
       status: 'UNAUTHENTICATED',
     });

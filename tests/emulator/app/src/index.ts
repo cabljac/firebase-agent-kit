@@ -1,12 +1,8 @@
-import { setDebugSkipTokenVerification } from '@genkit-ai/firebase/context';
 import { initializeApp } from 'firebase-admin/app';
 import { genkit, z } from 'genkit/beta';
 import { createUserScopedStore, onAgentRequest } from 'genkit-agent-functions';
 
 initializeApp();
-
-// The emulator's unsigned tokens fail the skip-verification decoder; verify against the Auth emulator instead.
-setDebugSkipTokenVerification(false);
 
 const ai = genkit({});
 
@@ -63,17 +59,14 @@ ai.defineModel({ name: 'test/scripted' }, async (request) => {
   return reply('unknown command');
 });
 
-const store = createUserScopedStore();
-
 const agent = ai.defineAgent({
   name: 'testAgent',
   model: 'test/scripted',
   tools: [approveTransfer],
-  store,
+  store: createUserScopedStore(),
   system: 'You are a deterministic test agent.',
 });
 
 export const testAgent = onAgentRequest(agent, {
-  store,
   httpsOptions: { timeoutSeconds: 60 },
 });

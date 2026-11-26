@@ -1,11 +1,19 @@
 import type express from 'express';
 import { logger } from 'firebase-functions';
 import { GenkitError, z } from 'genkit';
-import type { ActionContext, SessionStore } from 'genkit/beta';
+import type { ActionContext, Agent } from 'genkit/beta';
+import type { AgentRequestContext } from './types.js';
 
 const DetachInputSchema = z.object({ detach: z.literal(true) });
 const AuthContextSchema = z.object({
   auth: z.object({ uid: z.string().min(1) }),
+});
+const FirebaseAuthContextSchema = z.object({
+  auth: z.object({
+    uid: z.string().min(1),
+    token: z.object({}).passthrough(),
+    rawToken: z.string(),
+  }),
 });
 const InitIdsSchema = z.object({
   sessionId: z.string().optional(),
@@ -26,6 +34,13 @@ export function assertNotDetach(input: unknown): void {
   }
 }
 
+/** True when `context` carries Firebase Auth data with a non-empty uid. */
+export function isAuthedContext<C extends ActionContext>(
+  context: C,
+): context is C & AgentRequestContext {
+  return FirebaseAuthContextSchema.safeParse(context).success;
+}
+
 /** Returns the authenticated user id from `context`, or throws UNAUTHENTICATED. */
 export function requireUid(context: ActionContext | undefined): string {
   const parsed = AuthContextSchema.safeParse(context);
@@ -41,12 +56,13 @@ export function requireUid(context: ActionContext | undefined): string {
 /**
  * Computes the turn lock key (`<uid>:<sessionId>`) for an agent init payload.
  * Follows Genkit's resume precedence: a non-empty `snapshotId` wins over
- * `sessionId`, and empty ids count as absent. Returns `undefined` for a new
- * session or an unknown `snapshotId`.
+ * `sessionId`, and empty ids count as absent. A `snapshotId` is read through
+ * the agent's own store. Returns `undefined` for a new session or an unknown
+ * `snapshotId`.
  */
 export async function resolveLockKey<S>(
   init: unknown,
-  store: SessionStore<S>,
+  agent: Pick<Agent<S>, 'getSnapshotData'>,
   context: ActionContext,
 ): Promise<string | undefined> {
   const uid = requireUid(context);
@@ -54,7 +70,7 @@ export async function resolveLockKey<S>(
   if (!ids.success) return undefined;
   const { sessionId, snapshotId } = ids.data;
   if (snapshotId) {
-    const snapshot = await store.getSnapshot({
+    const snapshot = await agent.getSnapshotData({
       snapshotId,
       metadataOnly: true,
       context,

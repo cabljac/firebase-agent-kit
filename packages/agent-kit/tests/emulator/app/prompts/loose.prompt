@@ -1,0 +1,5 @@
+---
+model: test/scripted
+---
+{{role "system"}}
+You are the LOOSE agent.

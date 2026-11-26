@@ -10,17 +10,13 @@
     ".": {
       "types": "./lib/index.d.ts",
       "default": "./lib/index.js"
-    },
-    "./lib": {
-      "types": "./lib/lib.d.ts",
-      "default": "./lib/lib.js"
     }
   },
   "files": [
     "lib"
   ],
   "engines": {
-    "node": ">=22"
+    "node": ">=22.12"
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
@@ -40,6 +36,7 @@
     "@types/express": "5.0.6",
     "@types/node": "^22.0.0",
     "express": "5.3.0",
+    "google-auth-library": "9.15.1",
     "typescript": "5.9.3"
   }
 }

@@ -16,8 +16,8 @@ afterEach(async () => {
   await Promise.all(docs.map((d) => d.delete()));
 });
 
-const makeLock = (now: () => number = Date.now) =>
-  new FirestoreTurnLock({ collection: COLLECTION, now });
+const makeLock = () => new FirestoreTurnLock({ collection: COLLECTION });
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 test('second acquire returns null while held', async () => {
   const lock = makeLock();
@@ -41,21 +41,18 @@ test('acquire succeeds after release, and release is idempotent', async () => {
 });
 
 test('expired lease is taken over', async () => {
-  let t = 1_000;
-  const lock = makeLock(() => t);
-  expect(await lock.acquire('s1', { leaseMs: 100 })).not.toBeNull();
-  t = 1_050;
-  expect(await lock.acquire('s1', { leaseMs: 100 })).toBeNull();
-  t = 1_100;
-  expect(await lock.acquire('s1', { leaseMs: 100 })).not.toBeNull();
+  const lock = makeLock();
+  expect(await lock.acquire('s1', { leaseMs: 3_000 })).not.toBeNull();
+  expect(await lock.acquire('s1', { leaseMs: 3_000 })).toBeNull();
+  await sleep(3_100);
+  expect(await lock.acquire('s1', { leaseMs: 3_000 })).not.toBeNull();
 });
 
 test('stale holder release does not delete the new holder lock', async () => {
-  let t = 1_000;
-  const lock = makeLock(() => t);
-  const stale = await lock.acquire('s1', { leaseMs: 100 });
-  t = 2_000;
-  const fresh = await lock.acquire('s1', { leaseMs: 100 });
+  const lock = makeLock();
+  const stale = await lock.acquire('s1', { leaseMs: 50 });
+  await sleep(100);
+  const fresh = await lock.acquire('s1', { leaseMs: 60_000 });
   expect(fresh).not.toBeNull();
   expect(fresh?.owner).not.toBe(stale?.owner);
   await stale?.release();

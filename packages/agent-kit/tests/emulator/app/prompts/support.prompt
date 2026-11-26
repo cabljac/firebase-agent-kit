@@ -1,6 +1,6 @@
 ---
 model: test/scripted
-tools: [lookupOrder, userTool]
+tools: [lookupOrder, userTool, approveRefund]
 ---
 {{role "system"}}
 You are the SUPPORT agent.

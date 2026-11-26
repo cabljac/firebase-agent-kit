@@ -9,7 +9,9 @@
         "support": "config/support",
         "sales": "config/sales",
         "typo": "config/typo",
-        "missing": "config/missing"
+        "missing": "config/missing",
+        "guarded": "config/guarded",
+        "loose": "config/loose"
       }
     }
   ],

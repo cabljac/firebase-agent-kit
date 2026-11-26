@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { type Firestore, getFirestore } from 'firebase-admin/firestore';
+import { logger } from 'firebase-functions/logger';
 import type { FirestoreTurnLockOptions, TurnLease, TurnLock } from './types.js';
 
 const DEFAULT_COLLECTION = 'genkit-agent-locks';
@@ -7,12 +8,10 @@ const DEFAULT_COLLECTION = 'genkit-agent-locks';
 /** A {@link TurnLock} backed by one Firestore document per key. */
 export class FirestoreTurnLock implements TurnLock {
   private readonly collection: string;
-  private readonly now: () => number;
   private readonly explicitDb: Firestore | undefined;
 
   constructor(opts?: FirestoreTurnLockOptions) {
     this.collection = opts?.collection ?? DEFAULT_COLLECTION;
-    this.now = opts?.now ?? Date.now;
     this.explicitDb = opts?.firestore;
   }
 
@@ -33,7 +32,7 @@ export class FirestoreTurnLock implements TurnLock {
     const owner = randomUUID();
     const acquired = await this.db().runTransaction(async (tx) => {
       const snap = await tx.get(ref);
-      const now = this.now();
+      const now = Date.now();
       const expiresAt: unknown = snap.get('expiresAt');
       if (snap.exists && typeof expiresAt === 'number' && expiresAt > now) {
         return false;
@@ -56,7 +55,7 @@ export class FirestoreTurnLock implements TurnLock {
             if (snap.exists && snap.get('owner') === owner) tx.delete(ref);
           });
         } catch (err) {
-          console.error(`Failed to release turn lock for "${key}"`, err);
+          logger.error(`Failed to release turn lock for "${key}"`, err);
         }
       },
     };

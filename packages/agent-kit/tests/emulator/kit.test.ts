@@ -1,6 +1,9 @@
+import { createHash } from 'node:crypto';
+import { initializeApp } from 'firebase-admin/app';
+import { getFirestore } from 'firebase-admin/firestore';
 import { remoteAgent } from 'genkit/beta/client';
 import { describe, expect, test } from 'vitest';
-import { signUp } from '../../../../tests/emulator/helpers.js';
+import { defined, signUp } from '../../../../tests/emulator/helpers.js';
 
 const instanceUrl = (instanceId: string) =>
   `http://127.0.0.1:5001/demo-test/us-central1/kit-${instanceId}-agent`;
@@ -25,17 +28,53 @@ async function postTurn(instanceId: string, text: string, idToken: string) {
   return { status: res.status, body: await res.json() };
 }
 
+const problems: Record<string, string> = {
+  typo: 'Agent kit instance "typo" lists tools that are not defined: lookupOrdr. Fix the tools: list in prompts/typo.prompt or define the tools with defineKitTool.',
+  missing:
+    'Agent kit instance "missing" has no prompt: add prompts/missing.prompt to the function source directory.',
+};
+
 const misconfigured = (instanceId: string) => ({
   status: 400,
-  body: {
-    status: 'FAILED_PRECONDITION',
-    message: `Agent kit instance "${instanceId}" is misconfigured. See the function logs.`,
-  },
+  body: { status: 'FAILED_PRECONDITION', message: problems[instanceId] },
 });
+
+const preflight = (instanceId: string, origin: string) =>
+  fetch(instanceUrl(instanceId), {
+    method: 'OPTIONS',
+    headers: {
+      origin,
+      'access-control-request-method': 'POST',
+      'access-control-request-headers': 'authorization,content-type',
+    },
+  });
+
+interface EmulatedTrigger {
+  name: string;
+  timeoutSeconds: number;
+  availableMemoryMb: number;
+}
+
+async function emulatedTrigger(instanceId: string): Promise<EmulatedTrigger> {
+  const res = await fetch('http://127.0.0.1:5001/backends');
+  const { backends } = (await res.json()) as {
+    backends: Array<{ functionTriggers: EmulatedTrigger[] }>;
+  };
+  return defined(
+    backends
+      .flatMap((b) => b.functionTriggers)
+      .find((t) => t.name === `kit-${instanceId}-agent`),
+    `trigger for ${instanceId}`,
+  );
+}
 
 describe('genkit-agent-kit instances', () => {
   test.each([
-    ['support', 'You are the SUPPORT agent.', 'lookupOrder,userTool'],
+    [
+      'support',
+      'You are the SUPPORT agent.',
+      'approveRefund,lookupOrder,userTool',
+    ],
     ['sales', 'You are the SALES agent.', 'quotePrice'],
   ])(
     '%s runs its own prompt and tool list',
@@ -56,6 +95,23 @@ describe('genkit-agent-kit instances', () => {
     );
   });
 
+  test('a turn pauses on a kit interrupt and resumes with the client response', async () => {
+    const { idToken } = await signUp();
+    const chat = client('support', idToken).chat();
+    const paused = await chat.send('call approveRefund');
+    expect(paused.finishReason).toBe('interrupted');
+    const approval = defined(
+      paused.interrupts.find((i) => i.name === 'approveRefund'),
+      'approveRefund interrupt',
+    );
+    const resumed = await chat.resume({
+      respond: [approval.respond({ approved: true })],
+    });
+    expect(resumed.text).toBe(
+      `tool result: ${JSON.stringify({ approved: true })}`,
+    );
+  });
+
   test('an instance cannot call a tool its prompt does not list', async () => {
     const { idToken } = await signUp();
     const turn = client('sales', idToken).chat().send('call userTool');
@@ -70,7 +126,7 @@ describe('genkit-agent-kit instances', () => {
     ['typo', 'a misspelled tool name'],
     ['missing', 'no prompt file'],
   ])(
-    '%s (%s) answers 400 FAILED_PRECONDITION on every request',
+    '%s (%s) answers 400 FAILED_PRECONDITION with the problem on every request',
     async (instanceId) => {
       const { idToken } = await signUp();
       expect(await postTurn(instanceId, 'prompt', idToken)).toEqual(
@@ -97,5 +153,112 @@ describe('genkit-agent-kit instances', () => {
     });
     expect(res.status).toBe(401);
     expect(await res.json()).toMatchObject({ status: 'UNAUTHENTICATED' });
+  });
+});
+
+describe('genkit-agent-kit params from config-<instance>/.env.<projectId>', () => {
+  test('a non-empty JSON CORS_ORIGINS turns CORS on', async () => {
+    const res = await preflight('support', 'https://app.example.com');
+    expect(res.status).toBe(204);
+    expect(res.headers.get('access-control-allow-origin')).toBe(
+      'https://app.example.com',
+    );
+    expect(res.headers.get('access-control-allow-headers')).toContain(
+      'authorization',
+    );
+  });
+
+  test.each([
+    ['sales', '[]'],
+    ['typo', 'an empty value'],
+  ])(
+    '%s (CORS_ORIGINS set to %s) sends no CORS headers',
+    async (instanceId) => {
+      const res = await preflight(instanceId, 'https://app.example.com');
+      expect(res.headers.get('access-control-allow-origin')).toBeNull();
+    },
+  );
+
+  test.each([
+    ['support', 60, 256],
+    ['sales', 120, 512],
+  ])(
+    '%s gets its TIMEOUT_SECONDS and MEMORY',
+    async (instanceId, timeoutSeconds, availableMemoryMb) => {
+      expect(await emulatedTrigger(instanceId)).toMatchObject({
+        timeoutSeconds,
+        availableMemoryMb,
+      });
+    },
+  );
+
+  test('the turn lock lease follows TIMEOUT_SECONDS', async () => {
+    const { uid, idToken } = await signUp();
+    const chat = client('sales', idToken).chat();
+    await chat.send('prompt');
+    const sessionId = defined(chat.sessionId, 'sessionId');
+    const lockId = createHash('sha256')
+      .update(`${uid}:${sessionId}`)
+      .digest('hex');
+    const db = getFirestore(initializeApp({ projectId: 'demo-test' }, 'kit'));
+    const lockRef = db.collection('genkit-agent-locks').doc(lockId);
+
+    const sentAt = Date.now();
+    const turn = chat.send('wait 3000');
+    let settled = false;
+    const markSettled = () => {
+      settled = true;
+    };
+    turn.then(markSettled, markSettled);
+    let expiresAt: unknown;
+    while (expiresAt === undefined && !settled) {
+      expiresAt = (await lockRef.get()).get('expiresAt');
+    }
+    const readAt = Date.now();
+    await turn;
+    expect(typeof expiresAt).toBe('number');
+    // The lock was taken between sentAt and readAt.
+    expect(Number(expiresAt) - readAt).toBeLessThanOrEqual(150_000);
+    expect(Number(expiresAt) - sentAt).toBeGreaterThanOrEqual(150_000);
+  });
+
+  test('an ENFORCE_APP_CHECK value other than exactly true or false runs no turn', async () => {
+    const { idToken } = await signUp();
+    expect(await postTurn('loose', 'prompt', idToken)).toEqual({
+      status: 400,
+      body: {
+        status: 'FAILED_PRECONDITION',
+        message:
+          'Agent kit instance "loose" has an invalid value for ENFORCE_APP_CHECK: "TRUE". Set it to exactly true or false in config-loose/.env.<projectId>.',
+      },
+    });
+  });
+
+  test.each(['getSnapshot', 'waitForSnapshot', 'abort'])(
+    'an invalid ENFORCE_APP_CHECK value also rejects /%s',
+    async (route) => {
+      const { idToken } = await signUp();
+      const res = await fetch(`${instanceUrl('loose')}/${route}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${idToken}`,
+        },
+        body: JSON.stringify({ data: { snapshotId: 'x' } }),
+      });
+      expect(res.status).toBe(400);
+      expect(await res.json()).toMatchObject({ status: 'FAILED_PRECONDITION' });
+    },
+  );
+
+  test('ENFORCE_APP_CHECK rejects a signed-in caller without an App Check token', async () => {
+    const { idToken } = await signUp();
+    expect(await postTurn('guarded', 'prompt', idToken)).toEqual({
+      status: 403,
+      body: {
+        status: 'PERMISSION_DENIED',
+        message: 'AppCheck token is required',
+      },
+    });
   });
 });
