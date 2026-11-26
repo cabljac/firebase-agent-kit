@@ -169,7 +169,7 @@ test('reports 409 while another turn runs, then succeeds after a reload', async 
 
   const other = core();
   await other.loadSession(sessionId);
-  const slow = owner.runTurn({ message: 'slow 3000' });
+  const slow = owner.runTurn({ message: 'slow 8000' });
   await until(() => lockHeld(sessionId), 'the turn lock');
 
   const err = await other

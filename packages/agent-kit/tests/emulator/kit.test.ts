@@ -305,7 +305,7 @@ describe('firebase-agent-kit sessions per instance', () => {
       .collection('agent-kit-locks')
       .doc(lockId(uid, sessionId));
 
-    const slow = chat.send('wait 3000');
+    const slow = chat.send('wait 8000');
     let settled = false;
     const markSettled = () => {
       settled = true;
@@ -328,7 +328,7 @@ describe('firebase-agent-kit sessions per instance', () => {
         message: 'Another turn is running for this session.',
       },
     });
-    expect((await slow).text).toBe('waited 3000');
+    expect((await slow).text).toBe('waited 8000');
   });
 });
 
