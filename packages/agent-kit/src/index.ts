@@ -14,10 +14,12 @@ import {
 import { requiresAPI, requiresRole } from 'firebase-functions/v2';
 import { genkit, z } from 'genkit/beta';
 import {
+  acceptMiddlewareNames,
   checkAtColdStart,
   createKitGenkit,
   createPromptCheck,
   type KitGenkit,
+  kitMiddlewarePlugins,
   withLazyLocation,
 } from './lib.js';
 
@@ -107,8 +109,12 @@ const instanceId = process.env.FIREBASE_KIT_INSTANCE_ID ?? 'default';
 if (getApps().length === 0) initializeApp();
 
 const instance = genkit({
-  plugins: [vertexAI(withLazyLocation(() => vertexLocation.value()))],
+  plugins: [
+    vertexAI(withLazyLocation(() => vertexLocation.value())),
+    ...kitMiddlewarePlugins(instanceId),
+  ],
 });
+acceptMiddlewareNames(instance.registry);
 const toolNames = new Set<string>();
 
 /**
@@ -132,8 +138,9 @@ const promptCheck = createPromptCheck({
 checkAtColdStart(promptCheck);
 
 /**
- * The instance's agent endpoint, driven by `prompts/<instance id>.prompt` in
- * the function source directory. Routes match `remoteAgent({ url })`.
+ * The instance's agent endpoint, driven by `prompts/<instance id>.prompt` and
+ * `skills/<instance id>/` in the function source directory. Routes match
+ * `remoteAgent({ url })`.
  */
 export const agent = onAgentRequest(kitAgent, {
   httpsOptions: { cors: corsOrigins, timeoutSeconds, memory },

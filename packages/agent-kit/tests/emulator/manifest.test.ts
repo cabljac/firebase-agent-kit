@@ -85,13 +85,16 @@ describe('deploy discovery', () => {
   test.each([
     ['support', 'a prompt and tools'],
     ['missing', 'no prompt'],
+    ['skilled', 'skills'],
+    ['badskill', 'a skill without a description'],
   ])(
-    'reads no param value and runs no prompt check for %s (%s)',
+    'reads no param value and runs no prompt check or skills scan for %s (%s)',
     async (instanceId) => {
       const { output, manifest } = await discover(instanceId);
-      expect(manifest.endpoints.agent).toBeDefined();
+      expect(Object.keys(manifest.endpoints)).toEqual(['agent']);
       expect(output).not.toContain('invoked during function deployment');
       expect(output).not.toContain('Agent kit');
+      expect(output).not.toContain('skills from disk');
     },
   );
 });

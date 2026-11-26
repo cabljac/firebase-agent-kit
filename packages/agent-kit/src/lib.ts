@@ -1,18 +1,24 @@
+import { readdir, readFile } from 'node:fs/promises';
+import path from 'node:path';
 import {
   type AgentRequestContext,
   isAuthedContext,
 } from '@cabljac/firebase-agent-kit-core';
 import type { ToolFn, ToolFnOptions, ToolRunOptions } from '@genkit-ai/ai/tool';
 import type { vertexAI } from '@genkit-ai/google-genai';
+import { fallback, retry, skills } from '@genkit-ai/middleware';
 import { logger } from 'firebase-functions';
 import {
+  type GenerateMiddleware,
   GenkitError,
+  generateMiddleware,
   type InterruptConfig,
   type ToolAction,
   type ToolConfig,
   z,
 } from 'genkit';
 import type { GenkitBeta } from 'genkit/beta';
+import type { GenkitPluginV2 } from 'genkit/plugin';
 import type { Registry } from 'genkit/registry';
 
 /** What stops a prompt agent instance from running. */
@@ -21,6 +27,10 @@ export interface PromptAgentProblems {
   missingPrompt: boolean;
   /** Names in the prompt's `tools:` frontmatter that resolve to no action. */
   missingTools: string[];
+  /** Names in the prompt's `use:` frontmatter that resolve to no middleware. */
+  unknownMiddleware: string[];
+  /** Problems with the instance's skills, one sentence each. */
+  skillProblems: string[];
 }
 
 /** Options for {@link createPromptCheck}. */
@@ -36,6 +46,11 @@ export interface PromptValidationOptions {
    * `false` when set. firebase-functions reads any other value as `false`.
    */
   booleanParams?: string[];
+  /**
+   * The function source directory, which holds `skills/`. Defaults to the
+   * working directory when the check runs.
+   */
+  sourceDir?: string;
 }
 
 /**
@@ -124,6 +139,23 @@ const PromptMetadataSchema = z.object({
   prompt: z.object({ tools: z.array(z.string()).optional() }),
 });
 
+const PromptMiddlewareSchema = z.object({
+  prompt: z.object({
+    use: z
+      .array(z.object({ name: z.string(), config: z.unknown().optional() }))
+      .optional(),
+  }),
+});
+
+const SkillsConfigSchema = z.object({
+  skillPaths: z
+    .array(z.string())
+    .optional()
+    .describe(
+      'Directories of skills, relative to the function source directory. Defaults to skills/<instance id>.',
+    ),
+});
+
 async function resolvesTool(
   registry: Registry,
   name: string,
@@ -141,40 +173,272 @@ async function resolvesTool(
 }
 
 /**
- * Checks that the prompt `promptName` is registered and that every name in
- * its `tools:` frontmatter resolves the way Genkit resolves tools at generate
- * time. Returns `undefined` when the prompt agent can run.
+ * Checks that the prompt `promptName` is registered, that every name in its
+ * `tools:` frontmatter resolves the way Genkit resolves tools at generate
+ * time, that every name in its `use:` frontmatter is a registered middleware,
+ * and that its skills in `sourceDir` are valid. Returns `undefined` when the
+ * prompt agent can run.
  */
 export async function findPromptAgentProblems(
   registry: Registry,
   promptName: string,
+  sourceDir: string = process.cwd(),
 ): Promise<PromptAgentProblems | undefined> {
   const prompt = await registry.lookupAction(`/prompt/${promptName}`);
-  if (!prompt) return { missingPrompt: true, missingTools: [] };
+  if (!prompt) {
+    return {
+      missingPrompt: true,
+      missingTools: [],
+      unknownMiddleware: [],
+      skillProblems: [],
+    };
+  }
   const metadata = PromptMetadataSchema.safeParse(prompt.__action.metadata);
   const tools = metadata.success ? (metadata.data.prompt.tools ?? []) : [];
+  const middleware = PromptMiddlewareSchema.safeParse(prompt.__action.metadata);
+  const use = middleware.success ? (middleware.data.prompt.use ?? []) : [];
   const missingTools: string[] = [];
   for (const name of tools) {
     if (!(await resolvesTool(registry, name))) missingTools.push(name);
   }
-  return missingTools.length > 0
-    ? { missingPrompt: false, missingTools }
+  const unknownMiddleware: string[] = [];
+  for (const { name } of use) {
+    if (!(await registry.lookupValue('middleware', name))) {
+      unknownMiddleware.push(name);
+    }
+  }
+  const skillProblems = await findSkillProblems(
+    sourceDir,
+    promptName,
+    use.find((entry) => entry.name === 'skills'),
+  );
+  return missingTools.length > 0 ||
+    unknownMiddleware.length > 0 ||
+    skillProblems.length > 0
+    ? { missingPrompt: false, missingTools, unknownMiddleware, skillProblems }
     : undefined;
 }
+
+function isInsideDir(dir: string, target: string): boolean {
+  const relative = path.relative(dir, target);
+  return (
+    relative !== '' &&
+    relative !== '..' &&
+    !relative.startsWith(`..${path.sep}`) &&
+    !path.isAbsolute(relative)
+  );
+}
+
+async function listDirectories(dir: string): Promise<string[] | undefined> {
+  try {
+    const entries = await readdir(dir, { withFileTypes: true });
+    return entries
+      .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
+      .map((entry) => entry.name)
+      .sort();
+  } catch (err) {
+    if (isFileNotFound(err)) return undefined;
+    throw err;
+  }
+}
+
+function isFileNotFound(err: unknown): boolean {
+  return (
+    err instanceof Error &&
+    'code' in err &&
+    (err.code === 'ENOENT' || err.code === 'ENOTDIR')
+  );
+}
+
+/**
+ * Returns the `description` in the YAML frontmatter of a SKILL.md file, or
+ * `undefined` when the `description:` line is missing or empty.
+ */
+export function skillDescription(content: string): string | undefined {
+  const frontmatter = /^---\s*\r?\n([\s\S]*?)\r?\n---/.exec(content)?.[1];
+  return frontmatter
+    ? /^description:[ \t]*(\S.*)$/m.exec(frontmatter)?.[1]?.trim()
+    : undefined;
+}
+
+async function findSkillProblems(
+  sourceDir: string,
+  instanceId: string,
+  entry: { config?: unknown } | undefined,
+): Promise<string[]> {
+  const prompt = `prompts/${instanceId}.prompt`;
+  const defaultDir = path.join(sourceDir, 'skills', instanceId);
+  if (!entry) {
+    return (await listDirectories(defaultDir))
+      ? [
+          `skills/${instanceId}/ exists, but ${prompt} does not list skills in use:`,
+        ]
+      : [];
+  }
+  const config = SkillsConfigSchema.safeParse(entry.config ?? {});
+  if (!config.success) {
+    return [
+      `the skills config in ${prompt} must be { skillPaths: [<directory>, ...] }`,
+    ];
+  }
+  const problems: string[] = [];
+  for (const skillPath of config.data.skillPaths ?? [defaultDir]) {
+    const dir = path.resolve(sourceDir, skillPath);
+    if (!isInsideDir(sourceDir, dir)) {
+      problems.push(
+        `skillPaths entry "${skillPath}" in ${prompt} is not inside the function source directory`,
+      );
+      continue;
+    }
+    const shown = path.relative(sourceDir, dir).split(path.sep).join('/');
+    const skillDirs = await listDirectories(dir);
+    if (!skillDirs) {
+      problems.push(
+        `${prompt} lists skills in use:, but ${shown}/ does not exist`,
+      );
+      continue;
+    }
+    for (const name of skillDirs) {
+      const file = `${shown}/${name}/SKILL.md`;
+      let content: string;
+      try {
+        content = await readFile(path.join(dir, name, 'SKILL.md'), 'utf8');
+      } catch (err) {
+        if (!isFileNotFound(err)) throw err;
+        problems.push(`${file} does not exist`);
+        continue;
+      }
+      if (!skillDescription(content)) {
+        problems.push(`${file} has no description in its frontmatter`);
+      }
+    }
+  }
+  return problems;
+}
+
+const KIT_MIDDLEWARE = ['skills', 'retry', 'fallback'];
 
 function describeProblems(
   instanceId: string,
   problems: PromptAgentProblems,
 ): string {
+  const instance = `Agent kit instance "${instanceId}"`;
+  const prompt = `prompts/${instanceId}.prompt`;
   if (problems.missingPrompt) {
-    return `Agent kit instance "${instanceId}" has no prompt: add prompts/${instanceId}.prompt to the function source directory.`;
+    return `${instance} has no prompt: add ${prompt} to the function source directory.`;
   }
-  return `Agent kit instance "${instanceId}" lists tools that are not defined: ${problems.missingTools.join(', ')}. Fix the tools: list in prompts/${instanceId}.prompt or define the tools with ai.defineTool.`;
+  const sentences: string[] = [];
+  if (problems.missingTools.length > 0) {
+    sentences.push(
+      `${instance} lists tools that are not defined: ${problems.missingTools.join(', ')}. Fix the tools: list in ${prompt} or define the tools with ai.defineTool.`,
+    );
+  }
+  if (problems.unknownMiddleware.length > 0) {
+    sentences.push(
+      `${instance} uses middleware that is not available: ${problems.unknownMiddleware.join(', ')}. Fix the use: list in ${prompt}. The kit provides ${KIT_MIDDLEWARE.join(', ')}.`,
+    );
+  }
+  if (problems.skillProblems.length > 0) {
+    sentences.push(
+      `${instance} has skill problems: ${problems.skillProblems.join('; ')}.`,
+    );
+  }
+  return sentences.join(' ');
+}
+
+/**
+ * Resolves the directories that the kit `skills` middleware scans:
+ * `skills/<instanceId>` in `sourceDir`, or each of `skillPaths` relative to
+ * `sourceDir`. Throws `FAILED_PRECONDITION` for a path outside `sourceDir`.
+ */
+export function resolveSkillPaths(
+  sourceDir: string,
+  instanceId: string,
+  skillPaths?: string[],
+): string[] {
+  if (!skillPaths) return [path.join(sourceDir, 'skills', instanceId)];
+  return skillPaths.map((skillPath) => {
+    const dir = path.resolve(sourceDir, skillPath);
+    if (!isInsideDir(sourceDir, dir)) {
+      throw new GenkitError({
+        status: 'FAILED_PRECONDITION',
+        message: `Skill path "${skillPath}" is not inside the function source directory.`,
+      });
+    }
+    return dir;
+  });
+}
+
+/**
+ * The `skills` middleware of `@genkit-ai/middleware`, scoped to one
+ * instance. It reads skills from `skills/<instanceId>` in the directory that
+ * `sourceDir()` returns when a generate call starts, and rejects a
+ * `skillPaths` config outside that directory.
+ */
+export function instanceSkills(
+  instanceId: string,
+  sourceDir: () => string = () => process.cwd(),
+): GenerateMiddleware<typeof SkillsConfigSchema> {
+  return generateMiddleware(
+    {
+      name: 'skills',
+      description: skills.description,
+      configSchema: SkillsConfigSchema,
+    },
+    (options) =>
+      skills.instantiate({
+        ...options,
+        config: {
+          skillPaths: resolveSkillPaths(
+            sourceDir(),
+            instanceId,
+            options.config?.skillPaths,
+          ),
+        },
+      }),
+  );
+}
+
+/**
+ * The plugins that register the middleware a kit prompt can name in its
+ * `use:` frontmatter: `skills` (see {@link instanceSkills}), `retry` and
+ * `fallback`.
+ */
+export function kitMiddlewarePlugins(
+  instanceId: string,
+  sourceDir?: () => string,
+): GenkitPluginV2[] {
+  return [
+    instanceSkills(instanceId, sourceDir).plugin(),
+    retry.plugin(),
+    fallback.plugin(),
+  ];
+}
+
+/**
+ * Makes a bare middleware name in the `use:` list of a `.prompt` file, such
+ * as `use: [skills]`, reach generate calls. Genkit passes only `{ name }`
+ * entries on and drops bare names without an error.
+ */
+export function acceptMiddlewareNames(registry: Registry): void {
+  const { dotprompt } = registry;
+  const renderMetadata = dotprompt.renderMetadata.bind(dotprompt);
+  dotprompt.renderMetadata = async (source, additionalMetadata) => {
+    const metadata = await renderMetadata(source, additionalMetadata);
+    const use: unknown = metadata.raw?.use;
+    if (metadata.raw && Array.isArray(use)) {
+      metadata.raw.use = use.map((entry: unknown) =>
+        typeof entry === 'string' ? { name: entry } : entry,
+      );
+    }
+    return metadata;
+  };
 }
 
 /**
  * Builds an `authorize` hook that checks the raw values of `booleanParams`,
- * the instance prompt and its tools. On a problem it logs the details and throws `FAILED_PRECONDITION`, whose
+ * the instance prompt, its tools, its middleware and its skills. On a problem
+ * it logs the details and throws `FAILED_PRECONDITION`, whose
  * message holds the details only in the Functions emulator. A passing check
  * is cached for later turns.
  */
@@ -203,6 +467,7 @@ export function createPromptCheck(
     const problems = await findPromptAgentProblems(
       opts.registry,
       opts.instanceId,
+      opts.sourceDir,
     );
     if (problems) {
       fail(describeProblems(opts.instanceId, problems), {

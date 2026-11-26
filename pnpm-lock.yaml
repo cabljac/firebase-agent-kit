@@ -41,6 +41,9 @@ importers:
       '@genkit-ai/google-genai':
         specifier: 1.44.0
         version: 1.44.0(genkit@1.44.0(@google-cloud/firestore@9.4.1)(firebase-admin@14.5.1))
+      '@genkit-ai/middleware':
+        specifier: 0.12.0
+        version: 0.12.0(genkit@1.44.0(@google-cloud/firestore@9.4.1)(firebase-admin@14.5.1))
       firebase-admin:
         specifier: 14.5.1
         version: 14.5.1
@@ -511,6 +514,11 @@ packages:
 
   '@genkit-ai/google-genai@1.44.0':
     resolution: {integrity: sha512-QTa52ZFSrphTJMay0tsyvjW3sAXmkBVcbdJp2TGkGMebBI7YEroG+vlneM7R/B8zSx6apDkTCLI9dUWgRoEPvA==}
+    peerDependencies:
+      genkit: ^1.44.0
+
+  '@genkit-ai/middleware@0.12.0':
+    resolution: {integrity: sha512-Vj5sl732/cIfts2i/mk23rzODBpXlmnQ3oUgy2bH0dTI88fIHj6AdpE8cFdgLVkLWQwgEK58BzbgSMmDEUYsqg==}
     peerDependencies:
       genkit: ^1.44.0
 
@@ -4580,6 +4588,11 @@ snapshots:
     transitivePeerDependencies:
       - encoding
       - supports-color
+
+  '@genkit-ai/middleware@0.12.0(genkit@1.44.0(@google-cloud/firestore@9.4.1)(firebase-admin@14.5.1))':
+    dependencies:
+      genkit: 1.44.0(@google-cloud/firestore@9.4.1)(firebase-admin@14.5.1)
+      mime-types: 3.0.2
 
   '@google-cloud/cloud-sql-connector@1.13.0':
     dependencies:

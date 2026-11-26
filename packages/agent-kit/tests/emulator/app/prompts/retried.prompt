@@ -1,0 +1,8 @@
+---
+model: test/scripted
+use:
+  - name: retry
+    config: { maxRetries: 2, initialDelayMs: 1, noJitter: true }
+---
+{{role "system"}}
+You are the RETRIED agent.

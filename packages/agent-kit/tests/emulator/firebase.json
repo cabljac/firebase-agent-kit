@@ -11,7 +11,10 @@
         "typo": "config/typo",
         "missing": "config/missing",
         "guarded": "config/guarded",
-        "loose": "config/loose"
+        "loose": "config/loose",
+        "skilled": "config/sales",
+        "badskill": "config/sales",
+        "retried": "config/sales"
       }
     }
   ],

@@ -26,6 +26,8 @@ ai.defineInterrupt({
   outputSchema: z.object({ approved: z.boolean() }),
 });
 
+const failedFlakyKeys = new Set<string>();
+
 ai.defineModel({ name: 'test/scripted' }, async (request) => {
   const messages = request.messages;
   const last = messages[messages.length - 1];
@@ -64,7 +66,16 @@ ai.defineModel({ name: 'test/scripted' }, async (request) => {
         .join(','),
     );
   }
+  if (text.startsWith('flaky ')) {
+    const key = text.slice('flaky '.length);
+    if (!failedFlakyKeys.has(key)) {
+      failedFlakyKeys.add(key);
+      throw new Error(`flaky ${key} failed`);
+    }
+    return reply(`flaky ${key} recovered`);
+  }
   if (text.startsWith('call ')) {
+    const [name = '', ...input] = text.slice('call '.length).split(' ');
     return {
       finishReason: 'stop' as const,
       message: {
@@ -72,9 +83,9 @@ ai.defineModel({ name: 'test/scripted' }, async (request) => {
         content: [
           {
             toolRequest: {
-              name: text.slice('call '.length),
+              name,
               ref: 'call-1',
-              input: {},
+              input: input.length > 0 ? JSON.parse(input.join(' ')) : {},
             },
           },
         ],

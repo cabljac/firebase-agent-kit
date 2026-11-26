@@ -61,6 +61,8 @@ ai.defineTool(
 export * from '@cabljac/firebase-agent-kit';
 ```
 
+To give the agent skills, add `use: [skills]` to the prompt and put each skill in `source/skills/support/<skill name>/SKILL.md`. The model loads a skill only when it needs it. `use:` can also name `retry` and `fallback` for model calls. See [Skills](packages/agent-kit/README.md#skills).
+
 Change the params in `function-kits/firebase-agent-kit/config-support/.env.<projectId>`. See [Customise](packages/agent-kit/README.md#customise) and [Configuration](packages/agent-kit/README.md#configuration).
 
 ## Deploy

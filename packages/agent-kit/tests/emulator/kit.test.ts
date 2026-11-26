@@ -1,4 +1,6 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { initializeApp } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
 import { remoteAgent } from 'genkit/beta/client';
@@ -32,6 +34,8 @@ const problems: Record<string, string> = {
   typo: 'Agent kit instance "typo" lists tools that are not defined: lookupOrdr. Fix the tools: list in prompts/typo.prompt or define the tools with ai.defineTool.',
   missing:
     'Agent kit instance "missing" has no prompt: add prompts/missing.prompt to the function source directory.',
+  badskill:
+    'Agent kit instance "badskill" has skill problems: skills/badskill/returns/SKILL.md has no description in its frontmatter.',
 };
 
 const misconfigured = (instanceId: string) => ({
@@ -125,6 +129,7 @@ describe('firebase-agent-kit instances', () => {
   test.each([
     ['typo', 'a misspelled tool name'],
     ['missing', 'no prompt file'],
+    ['badskill', 'a skill without a description'],
   ])(
     '%s (%s) answers 400 FAILED_PRECONDITION with the problem on every request',
     async (instanceId) => {
@@ -260,5 +265,56 @@ describe('firebase-agent-kit params from config-<instance>/.env.<projectId>', ()
         message: 'AppCheck token is required',
       },
     });
+  });
+});
+
+describe('firebase-agent-kit middleware from the prompt use: list', () => {
+  test('use: [skills] gives the model the use_skill tool', async () => {
+    const { idToken } = await signUp();
+    const chat = client('skilled', idToken).chat();
+    expect((await chat.send('tools')).text).toBe('use_skill');
+  });
+
+  test('use: [skills] lists the skills of skills/<instance id>/ in the system prompt', async () => {
+    const { idToken } = await signUp();
+    const system = (await client('skilled', idToken).chat().send('prompt'))
+      .text;
+    expect(system.startsWith('You are the SKILLED agent.')).toBe(true);
+    expect(system).toContain('<skills>');
+    expect(system).toContain(' - refunds - How to handle a refund request.');
+  });
+
+  test('use_skill returns the text of the SKILL.md file', async () => {
+    const { idToken } = await signUp();
+    const skill = await readFile(
+      join(import.meta.dirname, 'app/skills/skilled/refunds/SKILL.md'),
+      'utf8',
+    );
+    const res = await client('skilled', idToken)
+      .chat()
+      .send('call use_skill {"skillName":"refunds"}');
+    expect(res.text).toBe(`tool result: ${JSON.stringify(skill)}`);
+  });
+
+  test('an instance whose prompt does not use skills gets no use_skill tool or skills block', async () => {
+    const { idToken } = await signUp();
+    const chat = client('sales', idToken).chat();
+    expect((await chat.send('tools')).text).toBe('quotePrice');
+    expect((await chat.send('prompt')).text).toBe('You are the SALES agent.');
+  });
+
+  test('use: retry retries a failed model call', async () => {
+    const { idToken } = await signUp();
+    const key = randomUUID();
+    const res = await client('retried', idToken).chat().send(`flaky ${key}`);
+    expect(res.text).toBe(`flaky ${key} recovered`);
+  });
+
+  test('without retry the same model failure fails the turn', async () => {
+    const { idToken } = await signUp();
+    const key = randomUUID();
+    await expect(
+      client('sales', idToken).chat().send(`flaky ${key}`),
+    ).rejects.toThrow(`flaky ${key} failed`);
   });
 });
