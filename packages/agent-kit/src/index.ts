@@ -121,7 +121,7 @@ export const ai: KitGenkit = createKitGenkit(instance, toolNames);
 
 const kitAgent = instance.definePromptAgent({
   promptName: instanceId,
-  store: createUserScopedStore(),
+  store: createUserScopedStore({ scope: instanceId }),
 });
 const promptCheck = createPromptCheck({
   registry: instance.registry,

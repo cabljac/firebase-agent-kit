@@ -1,17 +1,21 @@
-import { createHash } from 'node:crypto';
 import { FirestoreSessionStore } from '@genkit-ai/firebase/beta';
 import { getFirestore } from 'firebase-admin/firestore';
 import { GenkitError } from 'genkit';
 import type { SessionStore, SessionStoreOptions } from 'genkit/beta';
+import { userKey } from './keys.js';
 import type { UserScopedStoreOptions } from './types.js';
 
-const DEFAULT_COLLECTION = 'genkit-agent-sessions';
+const DEFAULT_COLLECTION = 'agent-kit-sessions';
 
 /**
- * Derives the Firestore path prefix for the authenticated user: the sha256 hex
- * of the uid. Throws `UNAUTHENTICATED` when the context carries no uid.
+ * Derives the Firestore path prefix for the authenticated user: the
+ * {@link userKey} of the uid in `scope`. Throws `UNAUTHENTICATED` when the
+ * context carries no uid.
  */
-export function uidPrefix(options?: SessionStoreOptions): string {
+export function uidPrefix(
+  options?: SessionStoreOptions,
+  scope?: string,
+): string {
   const uid: unknown = options?.context?.auth?.uid;
   if (typeof uid !== 'string' || uid.length === 0) {
     throw new GenkitError({
@@ -19,23 +23,25 @@ export function uidPrefix(options?: SessionStoreOptions): string {
       message: 'An authenticated user is required to access agent sessions.',
     });
   }
-  return createHash('sha256').update(uid).digest('hex');
+  return userKey(uid, scope);
 }
 
 /**
  * Creates a Firestore session store that isolates snapshots per authenticated
- * user. Every call requires `options.context.auth.uid` and fails with
- * `UNAUTHENTICATED` otherwise. Firestore is resolved on first use.
+ * user and, with `scope`, per scope. Every call requires
+ * `options.context.auth.uid` and fails with `UNAUTHENTICATED` otherwise.
+ * Firestore is resolved on first use.
  */
 export function createUserScopedStore<S = unknown>(
   opts?: UserScopedStoreOptions,
 ): SessionStore<S> {
+  const scope = opts?.scope;
   let inner: FirestoreSessionStore<S> | undefined;
   const store = (): FirestoreSessionStore<S> =>
     (inner ??= new FirestoreSessionStore<S>({
       db: opts?.firestore ?? getFirestore(),
       collection: opts?.collection ?? DEFAULT_COLLECTION,
-      snapshotPathPrefix: uidPrefix,
+      snapshotPathPrefix: (options) => uidPrefix(options, scope),
     }));
 
   return {

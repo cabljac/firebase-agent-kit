@@ -7,7 +7,7 @@ A Firebase Function Kit that serves a [Genkit](https://genkit.dev) agent from Cl
 Every instance gets:
 
 - **Firebase Auth on every route**, with optional App Check.
-- **Per-user sessions** in Firestore. One user cannot read, resume or abort the session of another user.
+- **Per-user sessions per instance** in Firestore. One user cannot read, resume or abort the session of another user, and one instance cannot load the session of another instance.
 - **One turn at a time** per session. A second turn on a busy session gets 409.
 - **Streaming and interrupts** through the stock `remoteAgent` client.
 - **Gemini on Vertex AI** with Application Default Credentials, so no API key.
@@ -294,7 +294,7 @@ Run `firebase functions:kits:install --package @cabljac/firebase-agent-kit` agai
 }
 ```
 
-Instance ids must be unique across all kit stanzas in the project. Each instance deploys its own `kit-<instance id>-agent` function with its own params and prompt. All instances share the session and lock collections.
+Instance ids must be unique across all kit stanzas in the project. Each instance deploys its own `kit-<instance id>-agent` function with its own params and prompt. All instances share the session and lock collections. Each instance keys its sessions by the instance id and the user, so one instance cannot load the sessions of another instance. The turn lock is keyed by the user and the session id only, so a turn on one instance also blocks a concurrent turn of the same user with the same session id on another instance.
 
 **Upgrade the kit.** Run `npm install @cabljac/firebase-agent-kit@<version>` in `function-kits/firebase-agent-kit/source`.
 
@@ -334,19 +334,19 @@ For a browser client, set `CORS_ORIGINS` to your web origins and deploy again. S
 - Build data paths from `context.auth.uid`. Never build them from model output alone.
 - Keep tool input schemas narrow.
 - Use `ai.defineInterrupt` to get user approval before a tool writes or spends.
-- Keep the four collections the kit writes closed to client SDKs: `genkit-agent-sessions`, `genkit-agent-sessions-pointers`, `genkit-agent-sessions-shards` (the message history) and `genkit-agent-locks`. Your Firestore rules must deny all client reads and writes there:
+- Keep the four collections the kit writes closed to client SDKs: `agent-kit-sessions`, `agent-kit-sessions-pointers`, `agent-kit-sessions-shards` (the message history) and `agent-kit-locks`. Your Firestore rules must deny all client reads and writes there:
 
   ```
-  match /genkit-agent-sessions/{document=**} {
+  match /agent-kit-sessions/{document=**} {
     allow read, write: if false;
   }
-  match /genkit-agent-sessions-pointers/{document=**} {
+  match /agent-kit-sessions-pointers/{document=**} {
     allow read, write: if false;
   }
-  match /genkit-agent-sessions-shards/{document=**} {
+  match /agent-kit-sessions-shards/{document=**} {
     allow read, write: if false;
   }
-  match /genkit-agent-locks/{document=**} {
+  match /agent-kit-locks/{document=**} {
     allow read, write: if false;
   }
   ```
@@ -369,7 +369,7 @@ The main entry reads the instance id and defines the params when it loads, so us
 - **No detached turns.** A request with `detach: true` gets 400 `FAILED_PRECONDITION`, because Cloud Functions throttles CPU after the response is sent.
 - **Denied reads return 500.** When a user asks for a snapshot that is not theirs, `@genkit-ai/express` returns 500 for the `NOT_FOUND` error.
 - **No session list.** There is no route that lists sessions. Clients must keep their own session ids.
-- **Sessions are scoped by user, not by instance.** All instances share the session collections, and a session is keyed only by the user. So a client can load a session of one instance into another instance, for the same user only. The other instance then continues that history with its own prompt and tools.
+- **Sessions belong to one instance.** All instances share the session collections, but each instance keys its sessions by the instance id and the user. When a client sends the snapshot id of another instance, the instance answers as for a snapshot of another user: `NOT_FOUND` on a turn, 500 on `/getSnapshot` and `/waitForSnapshot`. A turn with the session id of another instance starts a new session in this instance. If you rename an instance, its sessions stay under the old instance id, and the renamed instance cannot load them.
 - **No cleanup.** Documents in all four collections stay in Firestore until you delete them. The kit sets no TTL. A turn deletes its lock document when it ends, but a lock from a turn that did not end cleanly stays.
 - **No multipart tools.** `ai.defineTool` takes no `multipart: true` config.
 - **One model provider.** The kit registers only the Vertex AI plugin. Use `ai.defineModel` for anything else.

@@ -180,16 +180,27 @@ describe('cross-user isolation', () => {
     expect((await resumed.send('count')).text).toBe('user messages: 2');
   }
 
-  test('stores snapshots under the sha256 of the uid', async () => {
-    const { alice, snapshotId } = await startAliceSession();
-    const prefix = createHash('sha256').update(alice.uid).digest('hex');
+  test('stores snapshots, pointers and shards under the unscoped key of the uid', async () => {
+    const { alice, sessionId, snapshotId } = await startAliceSession();
+    const prefix = createHash('sha256')
+      .update(JSON.stringify([null, alice.uid]))
+      .digest('hex');
     const db = getFirestore();
-    const scoped = await db
-      .doc(`genkit-agent-sessions/${prefix}/snapshots/${snapshotId}`)
+    const snapshot = await db
+      .doc(`agent-kit-sessions/${prefix}/snapshots/${snapshotId}`)
       .get();
-    expect(scoped.exists).toBe(true);
+    expect(snapshot.exists).toBe(true);
+    const pointer = await db
+      .doc(`agent-kit-sessions-pointers/${prefix}/pointers/${sessionId}`)
+      .get();
+    expect(pointer.exists).toBe(true);
+    const shards = await db
+      .collection(`agent-kit-sessions-shards/${prefix}/shards`)
+      .limit(1)
+      .get();
+    expect(shards.size).toBe(1);
     const global = await db
-      .doc(`genkit-agent-sessions/global/snapshots/${snapshotId}`)
+      .doc(`agent-kit-sessions/global/snapshots/${snapshotId}`)
       .get();
     expect(global.exists).toBe(false);
   });

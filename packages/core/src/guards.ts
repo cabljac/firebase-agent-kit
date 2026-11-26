@@ -2,6 +2,7 @@ import type express from 'express';
 import { logger } from 'firebase-functions';
 import { GenkitError, z } from 'genkit';
 import type { ActionContext, Agent } from 'genkit/beta';
+import { lockKey } from './keys.js';
 import type { AgentRequestContext } from './types.js';
 
 const DetachInputSchema = z.object({ detach: z.literal(true) });
@@ -54,7 +55,7 @@ export function requireUid(context: ActionContext | undefined): string {
 }
 
 /**
- * Computes the turn lock key (`<uid>:<sessionId>`) for an agent init payload.
+ * Computes the turn lock key ({@link lockKey}) for an agent init payload.
  * Follows Genkit's resume precedence: a non-empty `snapshotId` wins over
  * `sessionId`, and empty ids count as absent. A `snapshotId` is read through
  * the agent's own store. Returns `undefined` for a new session or an unknown
@@ -75,9 +76,9 @@ export async function resolveLockKey<S>(
       metadataOnly: true,
       context,
     });
-    return snapshot?.sessionId ? `${uid}:${snapshot.sessionId}` : undefined;
+    return snapshot?.sessionId ? lockKey(uid, snapshot.sessionId) : undefined;
   }
-  return sessionId ? `${uid}:${sessionId}` : undefined;
+  return sessionId ? lockKey(uid, sessionId) : undefined;
 }
 
 /** Writes `err` as a JSON error response; unknown errors become a logged 500. */
