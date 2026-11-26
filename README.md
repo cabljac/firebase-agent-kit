@@ -119,6 +119,7 @@ pnpm test            # unit tests of all packages
 pnpm test:emulator   # core, against the Functions, Firestore and Auth emulators (needs Java 21)
 pnpm test:kit        # kit instances, against the emulators
 pnpm test:cli        # terminal client, against the emulators
+pnpm test:detach     # detached turns, against the emulators with Cloud Tasks, on offset ports
 ```
 
 The emulator tests use a scripted fake model, so they need no Google Cloud project.
