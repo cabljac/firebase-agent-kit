@@ -1,8 +1,13 @@
 {
-  "name": "genkit-agent-kit",
+  "name": "@cabljac/firebase-agent-kit",
   "version": "0.0.0",
   "description": "Function Kit that serves a Genkit prompt agent per instance, with per-user sessions and turn locking",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cabljac/firebase-agent-kit.git",
+    "directory": "packages/agent-kit"
+  },
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
@@ -13,7 +18,8 @@
     }
   },
   "files": [
-    "lib"
+    "lib",
+    "README.md"
   ],
   "engines": {
     "node": ">=22.12"
@@ -23,14 +29,14 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@cabljac/firebase-agent-kit-core": "workspace:*",
     "@genkit-ai/ai": "1.44.0",
     "@genkit-ai/express": "1.44.0",
     "@genkit-ai/firebase": "1.44.0",
     "@genkit-ai/google-genai": "1.44.0",
     "firebase-admin": "14.5.1",
     "firebase-functions": "7.4.0",
-    "genkit": "1.44.0",
-    "genkit-agent-functions": "workspace:*"
+    "genkit": "1.44.0"
   },
   "devDependencies": {
     "@types/express": "5.0.6",

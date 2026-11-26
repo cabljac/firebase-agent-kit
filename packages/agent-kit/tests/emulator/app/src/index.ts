@@ -1,11 +1,6 @@
-export * from 'genkit-agent-kit';
+export * from '@cabljac/firebase-agent-kit';
 
-import {
-  defineKitInterrupt,
-  defineKitModel,
-  defineKitTool,
-  z,
-} from 'genkit-agent-kit';
+import { ai, z } from '@cabljac/firebase-agent-kit';
 
 const ToolOutputSchema = z.object({
   tool: z.string(),
@@ -13,7 +8,7 @@ const ToolOutputSchema = z.object({
 });
 
 for (const name of ['lookupOrder', 'quotePrice', 'userTool']) {
-  defineKitTool(
+  ai.defineTool(
     {
       name,
       description: `Test tool ${name}.`,
@@ -24,14 +19,14 @@ for (const name of ['lookupOrder', 'quotePrice', 'userTool']) {
   );
 }
 
-defineKitInterrupt({
+ai.defineInterrupt({
   name: 'approveRefund',
   description: 'Ask the user to approve a refund.',
   inputSchema: z.object({}),
   outputSchema: z.object({ approved: z.boolean() }),
 });
 
-defineKitModel({ name: 'test/scripted' }, async (request) => {
+ai.defineModel({ name: 'test/scripted' }, async (request) => {
   const messages = request.messages;
   const last = messages[messages.length - 1];
   const reply = (text: string) => ({

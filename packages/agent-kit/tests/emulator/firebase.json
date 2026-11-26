@@ -1,8 +1,8 @@
 {
   "functions": [
     {
-      "kit": "genkit-agent-kit",
-      "sourcePackage": { "name": "genkit-agent-kit" },
+      "kit": "firebase-agent-kit",
+      "sourcePackage": { "name": "@cabljac/firebase-agent-kit" },
       "source": "app",
       "runtime": "nodejs22",
       "instances": {

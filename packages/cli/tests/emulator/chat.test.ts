@@ -20,7 +20,7 @@ const email = `cli-${Date.now()}@example.com`;
 const password = 'cli-password-123';
 
 beforeAll(async () => {
-  dir = await mkdtemp(join(tmpdir(), 'agent-chat-emulator-'));
+  dir = await mkdtemp(join(tmpdir(), 'fak-emulator-'));
   store = new ConfigStore(dir);
   const res = await fetch(
     `http://${AUTH_HOST}/identitytoolkit.googleapis.com/v1/accounts:signUp?key=${API_KEY}`,

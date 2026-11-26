@@ -1,3 +1,7 @@
+import {
+  createUserScopedStore,
+  onAgentRequest,
+} from '@cabljac/firebase-agent-kit-core';
 import { vertexAI } from '@genkit-ai/google-genai';
 import { getApps, initializeApp } from 'firebase-admin/app';
 import {
@@ -8,20 +12,18 @@ import {
   select,
 } from 'firebase-functions/params';
 import { requiresAPI, requiresRole } from 'firebase-functions/v2';
-import type { InterruptConfig, ToolAction, ToolConfig } from 'genkit';
-import { type GenkitBeta, genkit, z } from 'genkit/beta';
-import { createUserScopedStore, onAgentRequest } from 'genkit-agent-functions';
+import { genkit, z } from 'genkit/beta';
 import {
   checkAtColdStart,
+  createKitGenkit,
   createPromptCheck,
-  type KitToolFn,
-  withAuthedContext,
+  type KitGenkit,
   withLazyLocation,
 } from './lib.js';
 
-export type { AgentRequestContext } from 'genkit-agent-functions';
-export type { KitToolFn } from './lib.js';
-/** Genkit's Zod, for the schemas of tools defined with {@link defineKitTool}. */
+export type { AgentRequestContext } from '@cabljac/firebase-agent-kit-core';
+export type { KitGenkit, KitToolFn } from './lib.js';
+/** Genkit's Zod, for the schemas of tools defined with `ai.defineTool`. */
 export { z };
 
 requiresAPI(
@@ -104,55 +106,25 @@ const instanceId = process.env.FIREBASE_KIT_INSTANCE_ID ?? 'default';
 
 if (getApps().length === 0) initializeApp();
 
-const ai = genkit({
+const instance = genkit({
   plugins: [vertexAI(withLazyLocation(() => vertexLocation.value()))],
 });
 const toolNames = new Set<string>();
 
 /**
- * Registers a tool that an instance prompt can name in its `tools:`
- * frontmatter. Takes the same arguments as Genkit's `ai.defineTool`. The tool
- * function receives the caller's auth in `context.auth`, and a call without
- * it fails with `UNAUTHENTICATED`.
+ * The kit's Genkit instance, shared by every tool, model and prompt of the
+ * instance. `ai.defineTool` gives the tool function the caller's Firebase
+ * Auth in `context.auth` and fails with `UNAUTHENTICATED` without it. Every
+ * other member is Genkit's own.
  */
-export function defineKitTool<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
-  config: ToolConfig<I, O>,
-  fn: KitToolFn<I, O>,
-): ToolAction<I, O> {
-  const tool = ai.defineTool(config, withAuthedContext(config.name, fn));
-  toolNames.add(config.name);
-  return tool;
-}
+export const ai: KitGenkit = createKitGenkit(instance, toolNames);
 
-/**
- * Registers an interrupt that an instance prompt can name in its `tools:`
- * frontmatter. Takes the same arguments as Genkit's `ai.defineInterrupt`. A
- * turn that calls it ends with `finishReason: 'interrupted'`, and the client
- * answers with `chat.resume({ respond })`.
- */
-export function defineKitInterrupt<
-  I extends z.ZodTypeAny,
-  O extends z.ZodTypeAny,
->(config: InterruptConfig<I, O>): ToolAction<I, O> {
-  const interrupt = ai.defineInterrupt(config);
-  toolNames.add(config.name);
-  return interrupt;
-}
-
-/**
- * Registers a model that an instance prompt can name in its `model:`
- * frontmatter, for example a model served by your own backend or a scripted
- * model for tests. Takes the same arguments as Genkit's `ai.defineModel`.
- */
-export const defineKitModel: GenkitBeta['defineModel'] =
-  ai.defineModel.bind(ai);
-
-const kitAgent = ai.definePromptAgent({
+const kitAgent = instance.definePromptAgent({
   promptName: instanceId,
   store: createUserScopedStore(),
 });
 const promptCheck = createPromptCheck({
-  registry: ai.registry,
+  registry: instance.registry,
   instanceId,
   knownTools: () => toolNames,
   booleanParams: [enforceAppCheck.name],

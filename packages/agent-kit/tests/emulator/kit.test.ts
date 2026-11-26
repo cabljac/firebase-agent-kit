@@ -3,7 +3,7 @@ import { initializeApp } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
 import { remoteAgent } from 'genkit/beta/client';
 import { describe, expect, test } from 'vitest';
-import { defined, signUp } from '../../../../tests/emulator/helpers.js';
+import { defined, signUp } from '../../../core/tests/emulator/helpers.js';
 
 const instanceUrl = (instanceId: string) =>
   `http://127.0.0.1:5001/demo-test/us-central1/kit-${instanceId}-agent`;
@@ -29,7 +29,7 @@ async function postTurn(instanceId: string, text: string, idToken: string) {
 }
 
 const problems: Record<string, string> = {
-  typo: 'Agent kit instance "typo" lists tools that are not defined: lookupOrdr. Fix the tools: list in prompts/typo.prompt or define the tools with defineKitTool.',
+  typo: 'Agent kit instance "typo" lists tools that are not defined: lookupOrdr. Fix the tools: list in prompts/typo.prompt or define the tools with ai.defineTool.',
   missing:
     'Agent kit instance "missing" has no prompt: add prompts/missing.prompt to the function source directory.',
 };
@@ -68,7 +68,7 @@ async function emulatedTrigger(instanceId: string): Promise<EmulatedTrigger> {
   );
 }
 
-describe('genkit-agent-kit instances', () => {
+describe('firebase-agent-kit instances', () => {
   test.each([
     [
       'support',
@@ -156,7 +156,7 @@ describe('genkit-agent-kit instances', () => {
   });
 });
 
-describe('genkit-agent-kit params from config-<instance>/.env.<projectId>', () => {
+describe('firebase-agent-kit params from config-<instance>/.env.<projectId>', () => {
   test('a non-empty JSON CORS_ORIGINS turns CORS on', async () => {
     const res = await preflight('support', 'https://app.example.com');
     expect(res.status).toBe(204);

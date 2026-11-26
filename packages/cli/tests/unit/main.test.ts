@@ -11,7 +11,7 @@ import { CancelledError } from '../../src/ui/prompt.js';
 let dir: string;
 let server: Server | undefined;
 beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), 'agent-chat-main-'));
+  dir = await mkdtemp(join(tmpdir(), 'fak-main-'));
 });
 afterEach(async () => {
   await new Promise((resolve) => (server ? server.close(resolve) : resolve(0)));
@@ -64,7 +64,7 @@ beforeEach(async () => {
 test('--help prints usage and exits 0', async () => {
   const { code, out } = await run(['--help']);
   expect(code).toBe(0);
-  expect(out).toContain('Usage: genkit-agent-chat [instance]');
+  expect(out).toContain('Usage: fak [instance]');
 });
 
 test('an unknown option exits 1 with the problem on stderr', async () => {

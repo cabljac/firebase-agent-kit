@@ -13,7 +13,7 @@ import { resolveTarget } from '../../src/target.js';
 
 let root: string;
 beforeEach(async () => {
-  root = await mkdtemp(join(tmpdir(), 'agent-chat-target-'));
+  root = await mkdtemp(join(tmpdir(), 'fak-target-'));
 });
 afterEach(async () => {
   await rm(root, { recursive: true, force: true });
@@ -35,8 +35,8 @@ async function project(opts: {
       functions: [
         { source: 'functions', codebase: 'default' },
         {
-          kit: 'genkit-agent-kit',
-          source: 'function-kits/genkit-agent-kit/source',
+          kit: 'firebase-agent-kit',
+          source: 'function-kits/firebase-agent-kit/source',
           instances: opts.instances,
         },
       ],
@@ -47,7 +47,7 @@ async function project(opts: {
     await write(path, content);
 }
 
-const kitDir = (id: string) => `function-kits/genkit-agent-kit/config-${id}`;
+const kitDir = (id: string) => `function-kits/firebase-agent-kit/config-${id}`;
 
 test('builds the URL of the only instance from firebase.json and .firebaserc', async () => {
   await project({

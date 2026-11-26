@@ -1,11 +1,12 @@
 import { vertexAI } from '@genkit-ai/google-genai';
 import { logger } from 'firebase-functions';
-import { type ActionContext, GenkitError } from 'genkit';
-import { genkit, z } from 'genkit/beta';
+import { type ActionContext, GenkitError, ToolInterruptError } from 'genkit';
+import { GenkitBeta, genkit, z } from 'genkit/beta';
 import { UserRefreshClient } from 'google-auth-library';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import {
   checkAtColdStart,
+  createKitGenkit,
   createPromptCheck,
   findPromptAgentProblems,
   withAuthedContext,
@@ -107,6 +108,94 @@ describe('withAuthedContext', () => {
   });
 });
 
+describe('createKitGenkit', () => {
+  const kit = () => {
+    const instance = genkit({});
+    const toolNames = new Set<string>();
+    return { instance, toolNames, ai: createKitGenkit(instance, toolNames) };
+  };
+  const authed = { auth: { uid: 'u1', token: {}, rawToken: 't' } };
+
+  test('defineTool rejects a call without Firebase Auth with UNAUTHENTICATED', async () => {
+    const { ai } = kit();
+    const fn = vi.fn(async () => 'ok');
+    const tool = ai.defineTool(
+      { name: 'lookupOrder', description: 'd', inputSchema: z.object({}) },
+      fn,
+    );
+    await expect(tool({}, { context: {} })).rejects.toMatchObject({
+      status: 'UNAUTHENTICATED',
+    });
+    expect(fn).not.toHaveBeenCalled();
+  });
+
+  test('defineTool passes the caller uid to the tool function', async () => {
+    const { ai } = kit();
+    const tool = ai.defineTool(
+      {
+        name: 'whoami',
+        description: 'd',
+        inputSchema: z.object({}),
+        outputSchema: z.string(),
+      },
+      async (_input, { context }) => context.auth.uid,
+    );
+    await expect(tool({}, { context: authed })).resolves.toBe('u1');
+  });
+
+  test('defineTool and defineInterrupt register on the real instance and record the names', async () => {
+    const { ai, instance, toolNames } = kit();
+    ai.defineTool(
+      { name: 'lookupOrder', description: 'd', inputSchema: z.object({}) },
+      async () => 'ok',
+    );
+    const interrupt = ai.defineInterrupt({
+      name: 'approveRefund',
+      description: 'd',
+      inputSchema: z.object({}),
+      outputSchema: z.object({ approved: z.boolean() }),
+    });
+    expect([...toolNames]).toEqual(['lookupOrder', 'approveRefund']);
+    expect(
+      await instance.registry.lookupAction('/tool/lookupOrder'),
+    ).toBeDefined();
+    expect(
+      await instance.registry.lookupAction('/tool/approveRefund'),
+    ).toBeDefined();
+    await expect(interrupt({}, { context: authed })).rejects.toBeInstanceOf(
+      ToolInterruptError,
+    );
+  });
+
+  test('has no own data for deploy discovery to walk', () => {
+    const { ai } = kit();
+    expect(Object.keys(ai).sort()).toEqual(['defineInterrupt', 'defineTool']);
+  });
+
+  test('other members pass through to the real instance', async () => {
+    const { ai, instance, toolNames } = kit();
+    expect(ai).toBeInstanceOf(GenkitBeta);
+    expect(ai.registry).toBe(instance.registry);
+    ai.defineModel({ name: 'test/echo' }, async (request) => ({
+      finishReason: 'stop',
+      message: {
+        role: 'model',
+        content: request.messages.at(-1)?.content ?? [],
+      },
+    }));
+    const flow = ai.defineFlow('double', async (n: number) => n * 2);
+    ai.definePrompt({ name: 'greet', model: 'test/echo', messages: 'hello' });
+
+    expect(
+      await instance.registry.lookupAction('/model/test/echo'),
+    ).toBeDefined();
+    await expect(flow(2)).resolves.toBe(4);
+    const reply = await ai.prompt('greet')();
+    expect(reply.text).toBe('hello');
+    expect(toolNames.size).toBe(0);
+  });
+});
+
 describe('createPromptCheck', () => {
   test('logs the problem and throws FAILED_PRECONDITION', async () => {
     vi.stubEnv('FUNCTIONS_EMULATOR', '');
@@ -129,7 +218,7 @@ describe('createPromptCheck', () => {
         'Agent kit instance "typo" is misconfigured. See the function logs.',
     });
     expect(logger.error).toHaveBeenCalledWith(
-      'Agent kit instance "typo" lists tools that are not defined: lookupOrdr. Fix the tools: list in prompts/typo.prompt or define the tools with defineKitTool.',
+      'Agent kit instance "typo" lists tools that are not defined: lookupOrdr. Fix the tools: list in prompts/typo.prompt or define the tools with ai.defineTool.',
       {
         instanceId: 'typo',
         missingPrompt: false,

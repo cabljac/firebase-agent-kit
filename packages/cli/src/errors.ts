@@ -106,7 +106,7 @@ export function explain(err: unknown, ctx: ExplainContext = {}): Problem {
       kind: 'usage',
       title: err.title,
       detail: err.message,
-      hint: 'Run genkit-agent-chat --help for all options.',
+      hint: 'Run fak --help for all options.',
     };
   }
   if (err instanceof ConfigFileError) {

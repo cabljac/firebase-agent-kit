@@ -45,6 +45,11 @@ async function discover(instanceId: string) {
 }
 
 describe('deploy discovery', () => {
+  test('finds only the agent function in a wrapper that re-exports ai', async () => {
+    const { manifest } = await discover('support');
+    expect(Object.keys(manifest.endpoints)).toEqual(['agent']);
+  });
+
   test('declares the kit params and binds the function options to them', async () => {
     const { manifest } = await discover('support');
     expect(manifest.endpoints.agent).toMatchObject({

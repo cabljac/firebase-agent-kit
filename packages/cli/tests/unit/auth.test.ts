@@ -49,7 +49,7 @@ const refreshGrant = (n: number, refreshToken = 'refresh-1') => ({
 let dir: string;
 let store: ConfigStore;
 beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), 'agent-chat-auth-'));
+  dir = await mkdtemp(join(tmpdir(), 'fak-auth-'));
   store = new ConfigStore(dir);
 });
 afterEach(async () => {

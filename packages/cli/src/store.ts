@@ -74,7 +74,7 @@ export function configDir(
   else if (platform === 'darwin')
     base = join(home, 'Library', 'Application Support');
   else base = join(home, '.config');
-  return join(base, 'genkit-agent-chat');
+  return join(base, 'firebase-agent-kit');
 }
 
 const hashKey = (scope: string) =>

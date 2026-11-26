@@ -16,8 +16,8 @@ import { ConfigFileError, ConfigStore, configDir } from '../../src/store.js';
 let root: string;
 let store: ConfigStore;
 beforeEach(async () => {
-  root = await mkdtemp(join(tmpdir(), 'agent-chat-store-'));
-  store = new ConfigStore(join(root, 'genkit-agent-chat'));
+  root = await mkdtemp(join(tmpdir(), 'fak-store-'));
+  store = new ConfigStore(join(root, 'firebase-agent-kit'));
 });
 afterEach(async () => {
   await rm(root, { recursive: true, force: true });
@@ -31,14 +31,14 @@ const cred = (email: string, refreshToken = 'rt') => ({
 
 test('configDir prefers XDG_CONFIG_HOME, then the platform default', () => {
   expect(configDir({ XDG_CONFIG_HOME: '/x' }, 'darwin', '/h')).toBe(
-    '/x/genkit-agent-chat',
+    '/x/firebase-agent-kit',
   );
   expect(configDir({}, 'darwin', '/h')).toBe(
-    '/h/Library/Application Support/genkit-agent-chat',
+    '/h/Library/Application Support/firebase-agent-kit',
   );
-  expect(configDir({}, 'linux', '/h')).toBe('/h/.config/genkit-agent-chat');
+  expect(configDir({}, 'linux', '/h')).toBe('/h/.config/firebase-agent-kit');
   expect(configDir({ APPDATA: 'C:/AppData' }, 'win32', '/h')).toBe(
-    join('C:/AppData', 'genkit-agent-chat'),
+    join('C:/AppData', 'firebase-agent-kit'),
   );
 });
 
@@ -128,7 +128,7 @@ test('refuses a file with the wrong shape', async () => {
 
 test('ignores a relative XDG_CONFIG_HOME', () => {
   expect(configDir({ XDG_CONFIG_HOME: 'rel' }, 'linux', '/h')).toBe(
-    '/h/.config/genkit-agent-chat',
+    '/h/.config/firebase-agent-kit',
   );
 });
 

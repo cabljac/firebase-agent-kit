@@ -126,7 +126,7 @@ export async function runPlain(opts: PlainOptions): Promise<number> {
     }
   };
 
-  write(`genkit-agent-chat: ${opts.agentName} as ${opts.user}`);
+  write(`fak: ${opts.agentName} as ${opts.user}`);
   if (opts.resume) await load(opts.resume);
 
   for (let next = await queue.next(); !next.done; next = await queue.next()) {

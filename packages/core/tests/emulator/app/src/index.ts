@@ -1,6 +1,9 @@
+import {
+  createUserScopedStore,
+  onAgentRequest,
+} from '@cabljac/firebase-agent-kit-core';
 import { initializeApp } from 'firebase-admin/app';
 import { genkit, z } from 'genkit/beta';
-import { createUserScopedStore, onAgentRequest } from 'genkit-agent-functions';
 
 initializeApp();
 

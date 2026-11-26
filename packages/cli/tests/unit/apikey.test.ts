@@ -14,7 +14,7 @@ import {
 let dir: string;
 let env: NodeJS.ProcessEnv;
 beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), 'agent-chat-adc-'));
+  dir = await mkdtemp(join(tmpdir(), 'fak-adc-'));
   env = { GOOGLE_APPLICATION_CREDENTIALS: join(dir, 'adc.json') };
 });
 afterEach(async () => {

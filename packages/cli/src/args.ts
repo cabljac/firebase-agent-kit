@@ -19,7 +19,7 @@ export interface CliOptions {
 }
 
 /** Text for `--help`. */
-export const USAGE = `Usage: genkit-agent-chat [instance] [options]
+export const USAGE = `Usage: fak [instance] [options]
 
 Chat with a Genkit agent served by onAgentRequest or the agent kit.
 

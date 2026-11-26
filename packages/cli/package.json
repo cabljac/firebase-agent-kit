@@ -1,16 +1,16 @@
 {
-  "name": "genkit-agent-chat",
+  "name": "@cabljac/firebase-agent-kit-cli",
   "version": "0.0.0",
   "description": "Terminal chat client for Genkit agents served from Cloud Functions",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/cabljac/genkit-function-kit.git",
+    "url": "git+https://github.com/cabljac/firebase-agent-kit.git",
     "directory": "packages/cli"
   },
   "type": "module",
   "bin": {
-    "genkit-agent-chat": "lib/bin.js"
+    "fak": "lib/bin.js"
   },
   "files": [
     "lib",

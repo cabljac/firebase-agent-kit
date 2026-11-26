@@ -69,7 +69,7 @@ export function Header({
     >
       <Box marginBottom={1}>
         <Text color={theme.brand} bold>
-          {glyphs.brand} genkit-agent-chat
+          {glyphs.brand} fak
         </Text>
         <Text dimColor> v{version}</Text>
       </Box>

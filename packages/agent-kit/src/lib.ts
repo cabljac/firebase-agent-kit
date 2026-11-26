@@ -1,12 +1,19 @@
-import type { ToolFn, ToolFnOptions, ToolRunOptions } from '@genkit-ai/ai/tool';
-import type { vertexAI } from '@genkit-ai/google-genai';
-import { logger } from 'firebase-functions';
-import { GenkitError, z } from 'genkit';
-import type { Registry } from 'genkit/registry';
 import {
   type AgentRequestContext,
   isAuthedContext,
-} from 'genkit-agent-functions';
+} from '@cabljac/firebase-agent-kit-core';
+import type { ToolFn, ToolFnOptions, ToolRunOptions } from '@genkit-ai/ai/tool';
+import type { vertexAI } from '@genkit-ai/google-genai';
+import { logger } from 'firebase-functions';
+import {
+  GenkitError,
+  type InterruptConfig,
+  type ToolAction,
+  type ToolConfig,
+  z,
+} from 'genkit';
+import type { GenkitBeta } from 'genkit/beta';
+import type { Registry } from 'genkit/registry';
 
 /** What stops a prompt agent instance from running. */
 export interface PromptAgentProblems {
@@ -32,7 +39,7 @@ export interface PromptValidationOptions {
 }
 
 /**
- * The function of a tool defined with {@link defineKitTool}: Genkit's tool
+ * The function of a tool defined with `ai.defineTool`: Genkit's tool
  * function, with the caller's Firebase Auth in `context.auth`.
  */
 export type KitToolFn<I extends z.ZodTypeAny, O extends z.ZodTypeAny> = (
@@ -60,6 +67,57 @@ export function withAuthedContext<
     }
     return fn(input, { ...options, context });
   };
+}
+
+/**
+ * The kit's Genkit instance. Every member is the real `GenkitBeta` member,
+ * except `defineTool`, whose function gets the caller's Firebase Auth in
+ * `context.auth` and fails with `UNAUTHENTICATED` without it, and
+ * `defineInterrupt`. Both also record the name for the configuration check.
+ */
+export type KitGenkit = Omit<GenkitBeta, 'defineTool' | 'defineInterrupt'> & {
+  /**
+   * Registers a tool that an instance prompt can name in its `tools:`
+   * frontmatter. Takes the same config as Genkit's `ai.defineTool`.
+   */
+  defineTool<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
+    config: ToolConfig<I, O>,
+    fn: KitToolFn<I, O>,
+  ): ToolAction<I, O>;
+  /**
+   * Registers an interrupt that an instance prompt can name in its `tools:`
+   * frontmatter. Takes the same config as Genkit's `ai.defineInterrupt`.
+   */
+  defineInterrupt<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
+    config: InterruptConfig<I, O>,
+  ): ToolAction<I, O>;
+};
+
+/**
+ * Wraps `instance` as a {@link KitGenkit}. The names of the tools and
+ * interrupts defined through the wrapper are added to `toolNames`.
+ */
+export function createKitGenkit(
+  instance: GenkitBeta,
+  toolNames: Set<string>,
+): KitGenkit {
+  const overrides: Pick<KitGenkit, 'defineTool' | 'defineInterrupt'> = {
+    defineTool(config, fn) {
+      const tool = instance.defineTool(
+        config,
+        withAuthedContext(config.name, fn),
+      );
+      toolNames.add(config.name);
+      return tool;
+    },
+    defineInterrupt(config) {
+      const interrupt = instance.defineInterrupt(config);
+      toolNames.add(config.name);
+      return interrupt;
+    },
+  };
+  const base: GenkitBeta = Object.create(instance);
+  return Object.assign(base, overrides);
 }
 
 const PromptMetadataSchema = z.object({
@@ -111,7 +169,7 @@ function describeProblems(
   if (problems.missingPrompt) {
     return `Agent kit instance "${instanceId}" has no prompt: add prompts/${instanceId}.prompt to the function source directory.`;
   }
-  return `Agent kit instance "${instanceId}" lists tools that are not defined: ${problems.missingTools.join(', ')}. Fix the tools: list in prompts/${instanceId}.prompt or define the tools with defineKitTool.`;
+  return `Agent kit instance "${instanceId}" lists tools that are not defined: ${problems.missingTools.join(', ')}. Fix the tools: list in prompts/${instanceId}.prompt or define the tools with ai.defineTool.`;
 }
 
 /**

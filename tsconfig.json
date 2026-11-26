@@ -1,16 +1,7 @@
 {
+  "extends": "./tsconfig.base.json",
   "compilerOptions": {
-    "target": "ES2023",
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
-    "strict": true,
-    "noUncheckedIndexedAccess": true,
-    "esModuleInterop": true,
-    "skipLibCheck": true,
-    "declaration": true,
-    "sourceMap": true,
-    "outDir": "lib",
-    "rootDir": "."
+    "noEmit": true
   },
-  "include": ["src", "tests/unit", "tests/emulator/*.ts", "vitest*.config.ts"]
+  "include": ["vitest.config.ts"]
 }

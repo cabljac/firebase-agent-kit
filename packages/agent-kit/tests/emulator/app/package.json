@@ -9,9 +9,9 @@
     "build": "tsc -p tsconfig.json"
   },
   "dependencies": {
+    "@cabljac/firebase-agent-kit": "workspace:*",
     "firebase-admin": "14.5.1",
-    "firebase-functions": "7.4.0",
-    "genkit-agent-kit": "workspace:*"
+    "firebase-functions": "7.4.0"
   },
   "devDependencies": {
     "typescript": "5.9.3"
