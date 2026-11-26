@@ -5,3 +5,4 @@ lib/
 firebase-debug.log*
 firestore-debug.log*
 .secret.local
+.claude/worktrees/
