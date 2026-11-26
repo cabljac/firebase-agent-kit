@@ -1,8 +1,8 @@
+import { createHash } from 'node:crypto';
 import type { Response } from 'express';
 import { GenkitError } from 'genkit';
 import type { ActionContext, Agent, SessionSnapshot } from 'genkit/beta';
 import { describe, expect, test, vi } from 'vitest';
-import { lockKey } from '../../src/keys.js';
 
 vi.mock('firebase-functions', () => ({ logger: { error: vi.fn() } }));
 
@@ -30,6 +30,9 @@ function fakeAgent(snapshots: Record<string, SessionSnapshot>) {
 }
 
 const ctx: ActionContext = { auth: { uid: 'u1' } };
+
+const sha256 = (s: string) => createHash('sha256').update(s).digest('hex');
+const u1Key = (sessionId: string) => `${sha256('[null,"u1"]')}:${sessionId}`;
 
 describe('assertNotDetach', () => {
   test('throws FAILED_PRECONDITION when detach is true', () => {
@@ -111,7 +114,7 @@ describe('resolveLockKey', () => {
   test('uses sessionId directly without reading a snapshot', async () => {
     const { agent, getSnapshotData } = fakeAgent({});
     await expect(resolveLockKey({ sessionId: 's1' }, agent, ctx)).resolves.toBe(
-      lockKey('u1', 's1'),
+      u1Key('s1'),
     );
     expect(getSnapshotData).not.toHaveBeenCalled();
   });
@@ -122,7 +125,7 @@ describe('resolveLockKey', () => {
     });
     await expect(
       resolveLockKey({ sessionId: 's1', snapshotId: 'snap' }, agent, ctx),
-    ).resolves.toBe(lockKey('u1', 's1'));
+    ).resolves.toBe(u1Key('s1'));
     expect(getSnapshotData).toHaveBeenCalledWith(
       expect.objectContaining({ snapshotId: 'snap' }),
     );
@@ -132,7 +135,7 @@ describe('resolveLockKey', () => {
     const { agent, getSnapshotData } = fakeAgent({});
     await expect(
       resolveLockKey({ sessionId: 's1', snapshotId: '' }, agent, ctx),
-    ).resolves.toBe(lockKey('u1', 's1'));
+    ).resolves.toBe(u1Key('s1'));
     expect(getSnapshotData).not.toHaveBeenCalled();
   });
 
@@ -142,7 +145,7 @@ describe('resolveLockKey', () => {
     });
     await expect(
       resolveLockKey({ sessionId: '', snapshotId: 'snap' }, agent, ctx),
-    ).resolves.toBe(lockKey('u1', 's2'));
+    ).resolves.toBe(u1Key('s2'));
   });
 
   test("reads snapshotId metadata through the agent's store with the context", async () => {
@@ -151,7 +154,7 @@ describe('resolveLockKey', () => {
     });
     await expect(
       resolveLockKey({ snapshotId: 'snap' }, agent, ctx),
-    ).resolves.toBe(lockKey('u1', 's2'));
+    ).resolves.toBe(u1Key('s2'));
     expect(getSnapshotData).toHaveBeenCalledWith({
       snapshotId: 'snap',
       metadataOnly: true,

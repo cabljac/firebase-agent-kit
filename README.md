@@ -9,7 +9,7 @@ Serve a multi-user [Genkit](https://genkit.dev) agent from Firebase Cloud Functi
 What you get on every instance:
 
 - **Auth on every route.** Every route needs a Firebase Auth ID token, including the snapshot and abort routes. App Check is one param away.
-- **Per-user sessions.** Sessions live in Firestore, keyed by the user. One user cannot read, resume or abort the session of another user.
+- **Per-user sessions.** Sessions live in Firestore, keyed by the instance and the user. One user cannot read, resume or abort the session of another user, and one instance cannot load the session of another instance.
 - **One turn at a time.** A per-session lock gives a second, concurrent turn a clean 409 instead of a race on the same history.
 - **Streaming and interrupts.** The stock `remoteAgent` client streams replies and answers tool approvals.
 - **Gemini on Vertex AI with no API key.** Model calls use the function's service account.
@@ -60,6 +60,8 @@ ai.defineTool(
 
 export * from '@cabljac/firebase-agent-kit';
 ```
+
+To give the agent skills, add `use: [skills]` to the prompt and put each skill in `source/skills/support/<skill name>/SKILL.md`. The model loads a skill only when it needs it. `use:` can also name `retry` and `fallback` for model calls. See [Skills](packages/agent-kit/README.md#skills).
 
 Change the params in `function-kits/firebase-agent-kit/config-support/.env.<projectId>`. See [Customise](packages/agent-kit/README.md#customise) and [Configuration](packages/agent-kit/README.md#configuration).
 

@@ -110,8 +110,18 @@ The browser enforces the list. With one origin in the list, firebase-functions s
 ## What it does
 
 - **Authentication.** Every route needs a valid Firebase Auth ID token. A missing token gets 401, an invalid token gets 403. Set `enforceAppCheck: true` to also require App Check. It also takes a boolean params expression (for example `defineBoolean('ENFORCE_APP_CHECK')`), which is read on each request.
-- **Per-user sessions.** `createUserScopedStore()` writes three Firestore collections, each keyed by `sha256(uid)`: `genkit-agent-sessions/<sha256(uid)>/snapshots/...` holds the snapshots, `genkit-agent-sessions-pointers/<sha256(uid)>/pointers/...` holds one pointer document per session, and `genkit-agent-sessions-shards/<sha256(uid)>/shards/...` holds the sharded checkpoints, which contain the message history. With the `collection` option, the names are `<collection>`, `<collection>-pointers` and `<collection>-shards`. A user cannot read or resume another user's session. Give the agent this store, or another store that scopes snapshots by `context.auth.uid`. The library reads sessions through the agent's own store, so it cannot check this for you. Sessions are scoped by user, not by agent: two agents that share the store and its collections can load each other's sessions for the same user.
-- **One turn at a time.** A Firestore lease lock (`genkit-agent-locks`) serializes the turns of each session. A turn on a busy session retries the lock for about 3 seconds, then gets 409 `ABORTED`. A turn that starts a new session (no `sessionId` or `snapshotId`) takes no lock, except a detached one.
+- **Per-user sessions.** `createUserScopedStore()` writes three Firestore collections, each keyed by the user key: the sha256 hex of the JSON array `[scope, uid]`, with `null` when there is no scope. `agent-kit-sessions/<user key>/snapshots/...` holds the snapshots, `agent-kit-sessions-pointers/<user key>/pointers/...` holds one pointer document per session, and `agent-kit-sessions-shards/<user key>/shards/...` holds the sharded checkpoints, which contain the message history. With the `collection` option, the names are `<collection>`, `<collection>-pointers` and `<collection>-shards`. A user cannot read or resume another user's session. Give the agent this store, or another store that scopes snapshots by `context.auth.uid`. The library reads sessions through the agent's own store, so it cannot check this for you.
+- **Session scope.** Without a scope, two agents that share the collections can load each other's sessions for the same user. To keep the sessions of each agent apart, give the store of each agent its own `scope`, for example the agent name. The store puts the scope in the user key. A store without a scope and a store with any scope also never share sessions. The turn lock has no scope: it is keyed by the user and the session id, so one turn also blocks a concurrent turn of the same user with the same session id on another agent.
+
+  ```ts
+  const assistant = ai.defineAgent({
+    name: 'assistant',
+    model: 'vertexai/gemini-2.5-flash',
+    store: createUserScopedStore({ scope: 'assistant' }),
+  });
+  ```
+
+- **One turn at a time.** A Firestore lease lock (`agent-kit-locks`) serializes the turns of each session. A turn on a busy session retries the lock for about 3 seconds, then gets 409 `ABORTED`. A turn that starts a new session (no `sessionId` or `snapshotId`) takes no lock, except a detached one.
 - **Lease length.** The lease is the function's timeout plus 30 seconds. The timeout is `httpsOptions.timeoutSeconds`, else the `timeoutSeconds` from `setGlobalOptions`, else 60 seconds. A params expression (for example `defineInt('TIMEOUT')`) is read on each request. A value that is unset, zero or negative gives 60 seconds. Only a `setGlobalOptions` call that runs before `onAgentRequest` counts, the same rule firebase-functions uses for the deployed timeout.
 - **Turning the lock off.** Set `lock: false` only when turns on one session never overlap, for example when your only client waits for each reply before it sends the next message. Without the lock, two turns on one session can run at the same time on the same history. You can also pass your own `TurnLock`.
 - **Routes.** It serves the main route plus `/getSnapshot`, `/waitForSnapshot` and `/abort`, the same routes `remoteAgent` uses.
@@ -247,19 +257,19 @@ The worker claims the run in a transaction (a second delivery of the task is ref
 - Build data paths from `context.auth.uid`. Never build them from model output alone.
 - Keep tool input schemas narrow.
 - Use an interrupt (`ai.defineInterrupt`) to get user approval before a tool writes or spends.
-- Keep the five collections closed to client SDKs: `genkit-agent-sessions`, `genkit-agent-sessions-pointers`, `genkit-agent-sessions-shards` (the message history), `genkit-agent-locks` and `agent-kit-runs` (detached runs, which hold the input and the claims until a worker claims them). Only the functions, through the Admin SDK, may touch them. Your Firestore rules must deny all client reads and writes there:
+- Keep the five collections closed to client SDKs: `agent-kit-sessions`, `agent-kit-sessions-pointers`, `agent-kit-sessions-shards` (the message history), `agent-kit-locks` and `agent-kit-runs` (detached runs, which hold the input and the claims until a worker claims them). Only the functions, through the Admin SDK, may touch them. Your Firestore rules must deny all client reads and writes there:
 
   ```
-  match /genkit-agent-sessions/{document=**} {
+  match /agent-kit-sessions/{document=**} {
     allow read, write: if false;
   }
-  match /genkit-agent-sessions-pointers/{document=**} {
+  match /agent-kit-sessions-pointers/{document=**} {
     allow read, write: if false;
   }
-  match /genkit-agent-sessions-shards/{document=**} {
+  match /agent-kit-sessions-shards/{document=**} {
     allow read, write: if false;
   }
-  match /genkit-agent-locks/{document=**} {
+  match /agent-kit-locks/{document=**} {
     allow read, write: if false;
   }
   match /agent-kit-runs/{document=**} {
@@ -273,8 +283,8 @@ The worker claims the run in a transaction (a second delivery of the task is ref
 
 - **Detached turns need the `detach` option.** Without it, a request with `detach: true` gets 400 `FAILED_PRECONDITION`. See [Detached turns](#detached-turns-experimental) for their own limits.
 - **Denied reads return 500.** When a user asks for a snapshot that is not theirs, `@genkit-ai/express` returns 500 for the `NOT_FOUND` error. This comes from upstream.
-- **No session list.** Session documents sit under the sha256 hash of the uid, and there is no route that lists them. Clients must keep their own session ids.
-- **Sessions are scoped by user, not by agent.** A client can load a session of one agent into another agent that uses the same collections, for the same user only. Give each agent its own `collection` to keep their sessions apart.
+- **No session list.** Session documents sit under the user key, a sha256 hash, and there is no route that lists them. Clients must keep their own session ids.
+- **Sessions are scoped by user unless you set a scope.** Without `scope`, a client can load a session of one agent into another agent that uses the same collections, for the same user only. Give the store of each agent its own `scope` (see Session scope under What it does) or its own `collection` to keep their sessions apart.
 - **No cleanup.** Documents in the session and lock collections stay in Firestore until you delete them. The library sets no TTL on them; run documents carry an `expireAt` field for a TTL policy. A turn deletes its lock document when it ends, but a lock from a turn that did not end cleanly stays.
 
 ## Local development

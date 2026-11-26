@@ -3,7 +3,7 @@ import { getApps, initializeApp } from 'firebase-admin/app';
 import { getAuth } from 'firebase-admin/auth';
 import { getFirestore } from 'firebase-admin/firestore';
 import { remoteAgent } from 'genkit/beta/client';
-import { lockKey } from '../../src/keys.js';
+import { lockKey, userKey } from '../../src/keys.js';
 
 /** The demo project of the detach suite. */
 export const PROJECT = 'demo-detach';
@@ -73,7 +73,7 @@ export function postDetach(
 /** The lock document of a session. */
 export function lockDoc(uid: string, sessionId: string) {
   return admin()
-    .db.collection('genkit-agent-locks')
+    .db.collection('agent-kit-locks')
     .doc(createHash('sha256').update(lockKey(uid, sessionId)).digest('hex'));
 }
 
@@ -91,8 +91,8 @@ export async function runsOf(
 /** How many snapshots a user has. */
 export async function snapshotCount(uid: string): Promise<number> {
   const snap = await admin()
-    .db.collection('genkit-agent-sessions')
-    .doc(createHash('sha256').update(uid).digest('hex'))
+    .db.collection('agent-kit-sessions')
+    .doc(userKey(uid))
     .collection('snapshots')
     .count()
     .get();

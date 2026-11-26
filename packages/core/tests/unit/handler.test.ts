@@ -1,10 +1,10 @@
+import { createHash } from 'node:crypto';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { GenkitError } from 'genkit';
 import { genkit, InMemorySessionStore } from 'genkit/beta';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { createAgentApp } from '../../src/handler.js';
-import { lockKey } from '../../src/keys.js';
 import type {
   AgentRequestContext,
   AgentRequestOptions,
@@ -120,6 +120,8 @@ function authContext(uid: string): AgentRequestContext {
     },
   };
 }
+
+const U1_S1 = `${createHash('sha256').update('[null,"u1"]').digest('hex')}:s1`;
 
 const routes = [
   ['/', 'turn'],
@@ -316,8 +318,8 @@ describe('createAgentApp', () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as { result: { message: unknown } };
     expect(JSON.stringify(body.result.message)).toContain('echo');
-    expect(acquired).toEqual([{ key: lockKey('u1', 's1'), leaseMs: 150_000 }]);
-    await vi.waitFor(() => expect(released).toEqual([lockKey('u1', 's1')]));
+    expect(acquired).toEqual([{ key: U1_S1, leaseMs: 150_000 }]);
+    await vi.waitFor(() => expect(released).toEqual([U1_S1]));
   });
 
   test('uses a 60 second timeout for the default lease', async () => {
@@ -389,10 +391,7 @@ describe('createAgentApp', () => {
       init: { snapshotId: result.snapshotId },
     });
     expect(second.status).toBe(200);
-    expect(acquired.map((a) => a.key)).toEqual([
-      lockKey('u1', 's1'),
-      lockKey('u1', 's1'),
-    ]);
+    expect(acquired.map((a) => a.key)).toEqual([U1_S1, U1_S1]);
   });
 
   test('releases the lease when the client disconnects while acquire is pending', async () => {
@@ -441,7 +440,7 @@ describe('createAgentApp', () => {
     await new Promise((resolve) => setImmediate(resolve));
 
     finishAcquire();
-    await vi.waitFor(() => expect(released).toEqual([lockKey('u1', 's1')]));
+    await vi.waitFor(() => expect(released).toEqual([U1_S1]));
   });
 
   test('answers 400 for a malformed JSON body', async () => {

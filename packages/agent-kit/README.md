@@ -7,11 +7,12 @@ A Firebase Function Kit that serves a [Genkit](https://genkit.dev) agent from Cl
 Every instance gets:
 
 - **Firebase Auth on every route**, with optional App Check.
-- **Per-user sessions** in Firestore. One user cannot read, resume or abort the session of another user.
+- **Per-user sessions per instance** in Firestore. One user cannot read, resume or abort the session of another user, and one instance cannot load the session of another instance.
 - **One turn at a time** per session. A second turn on a busy session gets 409.
 - **Streaming and interrupts** through the stock `remoteAgent` client.
 - **Gemini on Vertex AI** with Application Default Credentials, so no API key.
-- **Configuration checks** for the prompt file, its `tools:` list and the params.
+- **Skills** per instance, and `retry` and `fallback` for model calls, from the `use:` list of the prompt.
+- **Configuration checks** for the prompt file, its `tools:` and `use:` lists, the skills and the params.
 - **Per-instance params** for CORS, timeout, memory, App Check and the Vertex AI location.
 
 The kit is built on [`@cabljac/firebase-agent-kit-core`](https://github.com/cabljac/firebase-agent-kit/tree/main/packages/core#readme).
@@ -59,6 +60,7 @@ function-kits/firebase-agent-kit/
   source/
     src/index.ts            your wrapper: re-exports the kit, and you define tools here
     prompts/support.prompt  one prompt per instance, named after the instance id (you create these)
+    skills/support/         optional skills of one instance, see Skills
   config-support/.env.<projectId>
 ```
 
@@ -175,6 +177,81 @@ ai.defineInterrupt({
 });
 ```
 
+### Skills
+
+A skill is a set of instructions that the model loads only when it needs them. Put the skills of an instance in `skills/<instance id>/` in the function source directory. Each skill is a directory with a `SKILL.md` file:
+
+```
+source/
+  prompts/support.prompt
+  skills/support/
+    refunds/SKILL.md
+    shipping/SKILL.md
+```
+
+The directory name is the skill name. `SKILL.md` starts with YAML frontmatter that has a `description`. Write the description plain, unquoted and on one line. The model reads the description to decide when to load the skill:
+
+```
+---
+description: How to handle a refund request.
+---
+Look up the order with lookupOrder before you offer a refund.
+Ask with approveRefund before you promise a refund over 100 USD.
+```
+
+Turn skills on with `use: [skills]` in the prompt:
+
+```
+---
+model: vertexai/gemini-2.5-flash
+tools: [lookupOrder, approveRefund]
+use: [skills]
+---
+{{role "system"}}
+You are the support agent.
+```
+
+On each turn, the kit adds a `<skills>` block to the system prompt, with the name and the description of each skill. It also gives the model a `use_skill` tool. When the model calls `use_skill` with a skill name, the tool returns the full text of that `SKILL.md` file.
+
+- Skills are text only. A skill grants no tools. The model can call only `use_skill` and the tools in the `tools:` list, whatever a skill says.
+- The model can repeat the text of a skill to the user. Do not put secrets in a `SKILL.md` file.
+- By default, an instance reads only its own `skills/<instance id>/` directory. The kit ignores directories whose names start with `.`.
+- The kit reads the skill files from the deployed function source directory. To change a skill, edit the file and deploy again. The kit skips skill directories that are symbolic links, and it checks paths by name only, without following links.
+
+To read skills from other directories, set `skillPaths`. Each path is relative to the function source directory and must be inside it:
+
+```
+use:
+  - name: skills
+    config: { skillPaths: [skills/shared, skills/support] }
+```
+
+### Retry and fallback
+
+The `use:` list can also name the `retry` and `fallback` middleware of [`@genkit-ai/middleware`](https://www.npmjs.com/package/@genkit-ai/middleware). Both act on model calls.
+
+`retry` calls the model again after an error, with exponential backoff. By default, it retries 3 times on `UNAVAILABLE`, `DEADLINE_EXCEEDED`, `RESOURCE_EXHAUSTED`, `ABORTED` and `INTERNAL`, and on errors that are not Genkit errors. The retries count toward `TIMEOUT_SECONDS`.
+
+```
+use:
+  - name: retry
+    config: { maxRetries: 2, initialDelayMs: 500 }
+```
+
+`fallback` calls the next model in `models` when the model fails with one of the statuses above, `NOT_FOUND` or `UNIMPLEMENTED`. It needs `models` with at least one model, so a bare `fallback` fails the configuration checks:
+
+```
+---
+model: vertexai/gemini-2.5-pro
+use:
+  - name: fallback
+    config:
+      models: [{ name: vertexai/gemini-2.5-flash }]
+---
+```
+
+A bare name uses the default config, for example `use: [skills, retry]`. The kit registers only `skills`, `retry` and `fallback`. Any other name fails the [configuration checks](#configuration-checks).
+
 ### Models and everything else
 
 Every other member of `ai` is Genkit's own. For example, `ai.defineModel` registers a model that a prompt can name in its `model:` frontmatter, such as a model served by your own backend or a scripted model for tests. `ai.defineFlow`, `ai.definePrompt`, `ai.prompt` and `ai.generate` work as in Genkit.
@@ -278,9 +355,17 @@ An empty list makes firebase-functions log a warning on every request, except in
 
 ### Configuration checks
 
-The kit checks that `prompts/<instance id>.prompt` exists, that every name in its `tools:` list is defined, and that `ENFORCE_APP_CHECK` is exactly `true` or `false`. firebase-functions reads any other value as `false`, which would turn App Check off without a sign. If a check fails, the kit logs the details, with the names of the tools you defined, through the `firebase-functions` logger.
+The kit checks that `prompts/<instance id>.prompt` exists, that every name in its `tools:` list is defined, that every entry in its `use:` list is a name or `{ name, config }`, that every name is `skills`, `retry` or `fallback`, that `fallback` has at least one model, and that `ENFORCE_APP_CHECK` is exactly `true` or `false`. firebase-functions reads any other value as `false`, which would turn App Check off without a sign. If a check fails, the kit logs the details, with the names of the tools you defined, through the `firebase-functions` logger.
 
-- **At cold start.** When an instance starts, the kit runs the check once in the background and logs any problem. A failed check does not stop the instance. The check does not run during deploy discovery.
+For [skills](#skills), the kit also checks that:
+
+- `skills/<instance id>/` exists when the `use:` list names `skills` without `skillPaths`.
+- `skills/<instance id>/` does not exist when the `use:` list does not name `skills`.
+- `skillPaths` is not an empty list, and each entry is a directory inside the function source directory.
+- Each skills directory has at least one skill.
+- Each skill directory has a `SKILL.md` file, and its frontmatter has a `description:` line that is not empty. The description is plain text on that line, not quoted and not a `|` or `>` block.
+
+- **At cold start.** When an instance starts, the kit runs the check once in the background and logs any problem. A failed check does not stop the instance. The check does not run during deploy discovery, so a deploy does not read the skill files.
 - **On each request.** Until the check passes, every request runs it again, on every route. A failed check answers 400 `FAILED_PRECONDITION`. Without the check, Genkit would return HTTP 200 with a failed turn and log nothing, and with an invalid `ENFORCE_APP_CHECK` the `/getSnapshot`, `/waitForSnapshot` and `/abort` routes would run without App Check.
 
 In production, the 400 message only says that the instance is misconfigured. In the Functions emulator, the message holds the details:
@@ -312,7 +397,7 @@ Run `firebase functions:kits:install --package @cabljac/firebase-agent-kit` agai
 }
 ```
 
-Instance ids must be unique across all kit stanzas in the project. Each instance deploys its own `kit-<instance id>-agent` function with its own params and prompt. All instances share the session and lock collections.
+Instance ids must be unique across all kit stanzas in the project. Each instance deploys its own `kit-<instance id>-agent` function with its own params and prompt. All instances share the session and lock collections. Each instance keys its sessions by the instance id and the user, so one instance cannot load the sessions of another instance. The turn lock is keyed by the user and the session id only, so a turn on one instance also blocks a concurrent turn of the same user with the same session id on another instance.
 
 **Upgrade the kit.** Run `npm install @cabljac/firebase-agent-kit@<version>` in `function-kits/firebase-agent-kit/source`.
 
@@ -352,19 +437,19 @@ For a browser client, set `CORS_ORIGINS` to your web origins and deploy again. S
 - Build data paths from `context.auth.uid`. Never build them from model output alone.
 - Keep tool input schemas narrow.
 - Use `ai.defineInterrupt` to get user approval before a tool writes or spends.
-- Keep the five collections the kit writes closed to client SDKs: `genkit-agent-sessions`, `genkit-agent-sessions-pointers`, `genkit-agent-sessions-shards` (the message history), `genkit-agent-locks` and `agent-kit-runs` (detached runs). Your Firestore rules must deny all client reads and writes there:
+- Keep the five collections the kit writes closed to client SDKs: `agent-kit-sessions`, `agent-kit-sessions-pointers`, `agent-kit-sessions-shards` (the message history), `agent-kit-locks` and `agent-kit-runs` (detached runs). Your Firestore rules must deny all client reads and writes there:
 
   ```
-  match /genkit-agent-sessions/{document=**} {
+  match /agent-kit-sessions/{document=**} {
     allow read, write: if false;
   }
-  match /genkit-agent-sessions-pointers/{document=**} {
+  match /agent-kit-sessions-pointers/{document=**} {
     allow read, write: if false;
   }
-  match /genkit-agent-sessions-shards/{document=**} {
+  match /agent-kit-sessions-shards/{document=**} {
     allow read, write: if false;
   }
-  match /genkit-agent-locks/{document=**} {
+  match /agent-kit-locks/{document=**} {
     allow read, write: if false;
   }
   match /agent-kit-runs/{document=**} {
@@ -391,7 +476,7 @@ The main entry reads the instance id and defines the params when it loads, so us
 - **Detached turns are experimental and off by default.** See `DETACHED_TURNS` in [Configuration](#configuration).
 - **Denied reads return 500.** When a user asks for a snapshot that is not theirs, `@genkit-ai/express` returns 500 for the `NOT_FOUND` error.
 - **No session list.** There is no route that lists sessions. Clients must keep their own session ids.
-- **Sessions are scoped by user, not by instance.** All instances share the session collections, and a session is keyed only by the user. So a client can load a session of one instance into another instance, for the same user only. The other instance then continues that history with its own prompt and tools.
+- **Sessions belong to one instance.** All instances share the session collections, but each instance keys its sessions by the instance id and the user. When a client sends the snapshot id of another instance, the instance answers as for a snapshot of another user: `NOT_FOUND` on a turn, 500 on `/getSnapshot` and `/waitForSnapshot`. A turn with the session id of another instance starts a new session in this instance. If you rename an instance, its sessions stay under the old instance id, and the renamed instance cannot load them.
 - **No cleanup.** Documents in the session and lock collections stay in Firestore until you delete them. The kit sets no TTL on them; run documents have an `expireAt` field for a TTL policy. A turn deletes its lock document when it ends, but a lock from a turn that did not end cleanly stays.
 - **No multipart tools.** `ai.defineTool` takes no `multipart: true` config.
 - **One model provider.** The kit registers only the Vertex AI plugin. Use `ai.defineModel` for anything else.

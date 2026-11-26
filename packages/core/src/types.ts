@@ -7,15 +7,21 @@ import type { AgentInit, AgentInput, SessionStore } from 'genkit/beta';
 
 /** Options for {@link createUserScopedStore}. */
 export interface UserScopedStoreOptions {
-  /** Root Firestore collection for snapshots. Defaults to `genkit-agent-sessions`. */
+  /** Root Firestore collection for snapshots. Defaults to `agent-kit-sessions`. */
   collection?: string;
+  /**
+   * Scope of the sessions, for example an agent name. Stores with different
+   * scopes cannot load each other's sessions, even for the same user. Defaults
+   * to no scope.
+   */
+  scope?: string;
   /** Firestore instance. Defaults to `getFirestore()` on the default app. */
   firestore?: Firestore;
 }
 
 /** A held per-session turn lock. */
 export interface TurnLease {
-  /** The lock key (a session id). */
+  /** The lock key, which identifies one session of one user. */
   readonly key: string;
   /** Random id of this holder; only this holder can release the lease. */
   readonly owner: string;
@@ -45,7 +51,7 @@ export interface TurnLock {
 
 /** Options for {@link FirestoreTurnLock}. */
 export interface FirestoreTurnLockOptions {
-  /** Collection holding one lock document per session. Defaults to `genkit-agent-locks`. */
+  /** Collection holding one lock document per session. Defaults to `agent-kit-locks`. */
   collection?: string;
   /** Firestore instance. Defaults to `getFirestore()` on the default app. */
   firestore?: Firestore;

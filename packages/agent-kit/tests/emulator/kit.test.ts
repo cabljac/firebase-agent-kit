@@ -1,9 +1,21 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { initializeApp } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
 import { remoteAgent } from 'genkit/beta/client';
 import { describe, expect, test } from 'vitest';
 import { defined, signUp } from '../../../core/tests/emulator/helpers.js';
+
+const sha256 = (s: string) => createHash('sha256').update(s).digest('hex');
+const userKey = (instanceId: string, uid: string) =>
+  sha256(JSON.stringify([instanceId, uid]));
+const lockId = (uid: string, sessionId: string) =>
+  sha256(`${sha256(JSON.stringify([null, uid]))}:${sessionId}`);
+
+let kitDb: FirebaseFirestore.Firestore | undefined;
+const db = () =>
+  (kitDb ??= getFirestore(initializeApp({ projectId: 'demo-test' }, 'kit')));
 
 const instanceUrl = (instanceId: string) =>
   `http://127.0.0.1:5001/demo-test/us-central1/kit-${instanceId}-agent`;
@@ -14,24 +26,36 @@ const client = (instanceId: string, idToken: string) =>
     headers: { Authorization: `Bearer ${idToken}` },
   });
 
-async function postTurn(instanceId: string, text: string, idToken: string) {
-  const res = await fetch(instanceUrl(instanceId), {
+async function postRoute(
+  instanceId: string,
+  path: string,
+  body: unknown,
+  idToken: string,
+) {
+  const res = await fetch(`${instanceUrl(instanceId)}${path}`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${idToken}`,
     },
-    body: JSON.stringify({
-      data: { message: { role: 'user', content: [{ text }] } },
-    }),
+    body: JSON.stringify(body),
   });
   return { status: res.status, body: await res.json() };
 }
+
+const userMessage = (text: string) => ({
+  message: { role: 'user', content: [{ text }] },
+});
+
+const postTurn = (instanceId: string, text: string, idToken: string) =>
+  postRoute(instanceId, '', { data: userMessage(text) }, idToken);
 
 const problems: Record<string, string> = {
   typo: 'Agent kit instance "typo" lists tools that are not defined: lookupOrdr. Fix the tools: list in prompts/typo.prompt or define the tools with ai.defineTool.',
   missing:
     'Agent kit instance "missing" has no prompt: add prompts/missing.prompt to the function source directory.',
+  badskill:
+    'Agent kit instance "badskill" has skill problems: skills/badskill/returns/SKILL.md has no description in its frontmatter.',
 };
 
 const misconfigured = (instanceId: string) => ({
@@ -125,6 +149,7 @@ describe('firebase-agent-kit instances', () => {
   test.each([
     ['typo', 'a misspelled tool name'],
     ['missing', 'no prompt file'],
+    ['badskill', 'a skill without a description'],
   ])(
     '%s (%s) answers 400 FAILED_PRECONDITION with the problem on every request',
     async (instanceId) => {
@@ -153,6 +178,157 @@ describe('firebase-agent-kit instances', () => {
     });
     expect(res.status).toBe(401);
     expect(await res.json()).toMatchObject({ status: 'UNAUTHENTICATED' });
+  });
+});
+
+describe('firebase-agent-kit sessions per instance', () => {
+  type SupportSession = Awaited<ReturnType<typeof startSupportSession>>;
+
+  async function startSupportSession() {
+    const user = await signUp();
+    const chat = client('support', user.idToken).chat();
+    const first = await chat.send('count');
+    expect(first.text).toBe('user messages: 1');
+    const snapshotId = defined(first.snapshotId, 'snapshotId');
+    return {
+      user,
+      sessionId: defined(chat.sessionId, 'sessionId'),
+      snapshotId,
+      snapshot: await client('support', user.idToken).getSnapshot(snapshotId),
+    };
+  }
+
+  async function expectSupportResumes(
+    idToken: string,
+    { sessionId, snapshotId, snapshot }: SupportSession,
+  ) {
+    expect(await client('support', idToken).getSnapshot(snapshotId)).toEqual(
+      snapshot,
+    );
+    const resumed = await client('support', idToken).loadChat({ sessionId });
+    expect((await resumed.send('count')).text).toBe('user messages: 2');
+  }
+
+  test('stores sessions under the key of the uid in the instance scope', async () => {
+    const { user, sessionId, snapshotId } = await startSupportSession();
+    const prefix = userKey('support', user.uid);
+    const snapshot = await db()
+      .doc(`agent-kit-sessions/${prefix}/snapshots/${snapshotId}`)
+      .get();
+    expect(snapshot.exists).toBe(true);
+    const pointer = await db()
+      .doc(`agent-kit-sessions-pointers/${prefix}/pointers/${sessionId}`)
+      .get();
+    expect(pointer.exists).toBe(true);
+    const shards = await db()
+      .collection(`agent-kit-sessions-shards/${prefix}/shards`)
+      .limit(1)
+      .get();
+    expect(shards.size).toBe(1);
+  });
+
+  test.each([
+    ['/getSnapshot', 'snapshotId'],
+    ['/getSnapshot', 'sessionId'],
+    ['/waitForSnapshot', 'snapshotId'],
+  ] as const)(
+    "sales answers 500 INTERNAL when the same user calls %s with a support session's %s",
+    async (path, idName) => {
+      const session = await startSupportSession();
+      const { user, sessionId, snapshotId } = session;
+      const ids = { sessionId, snapshotId };
+      expect(
+        await postRoute(
+          'sales',
+          path,
+          { data: { [idName]: ids[idName] } },
+          user.idToken,
+        ),
+      ).toEqual({
+        status: 500,
+        body: { status: 'INTERNAL', message: 'Internal Error' },
+      });
+      await expectSupportResumes(user.idToken, session);
+    },
+  );
+
+  test("sales fails the turn when the same user resumes a support session's snapshotId", async () => {
+    const session = await startSupportSession();
+    const { user, snapshotId } = session;
+    await expect(
+      client('sales', user.idToken).chat({ snapshotId }).send('count'),
+    ).rejects.toMatchObject({
+      name: 'AgentError',
+      status: 'NOT_FOUND',
+      message: `Snapshot ${snapshotId} not found`,
+    });
+    await expectSupportResumes(user.idToken, session);
+  });
+
+  test("sales starts a fresh session when the same user sends a support session's sessionId", async () => {
+    const session = await startSupportSession();
+    const { user, sessionId } = session;
+    const res = await postRoute(
+      'sales',
+      '',
+      { data: userMessage('count'), init: { sessionId } },
+      user.idToken,
+    );
+    expect(res.status).toBe(200);
+    expect(res.body.result).toMatchObject({
+      message: { content: [{ text: 'user messages: 1' }] },
+      sessionId,
+    });
+    await expectSupportResumes(user.idToken, session);
+  });
+
+  test("sales answers /abort with no status when the same user sends a support session's snapshotId", async () => {
+    const session = await startSupportSession();
+    const { user, snapshotId } = session;
+    expect(
+      await postRoute(
+        'sales',
+        '/abort',
+        { data: { snapshotId } },
+        user.idToken,
+      ),
+    ).toEqual({ status: 200, body: { result: { snapshotId } } });
+    await expectSupportResumes(user.idToken, session);
+  });
+
+  test('a turn on one instance holds the lock of the same user and session id on every instance', async () => {
+    const { uid, idToken } = await signUp();
+    const chat = client('sales', idToken).chat();
+    await chat.send('count');
+    const sessionId = defined(chat.sessionId, 'sessionId');
+    const salesLock = db()
+      .collection('agent-kit-locks')
+      .doc(lockId(uid, sessionId));
+
+    const slow = chat.send('wait 3000');
+    let settled = false;
+    const markSettled = () => {
+      settled = true;
+    };
+    slow.then(markSettled, markSettled);
+    let held = false;
+    while (!held && !settled) held = (await salesLock.get()).exists;
+    expect(held).toBe(true);
+
+    const support = await postRoute(
+      'support',
+      '',
+      { data: userMessage('count'), init: { sessionId } },
+      idToken,
+    );
+    expect(support).toEqual({
+      status: 409,
+      body: {
+        status: 'ABORTED',
+        message: 'Another turn is running for this session.',
+      },
+    });
+    expect((await slow).text).toBe('waited 3000');
   });
 });
 
@@ -197,14 +373,9 @@ describe('firebase-agent-kit params from config-<instance>/.env.<projectId>', ()
     const chat = client('sales', idToken).chat();
     await chat.send('prompt');
     const sessionId = defined(chat.sessionId, 'sessionId');
-    const userKey = createHash('sha256')
-      .update(JSON.stringify([null, uid]))
-      .digest('hex');
-    const lockId = createHash('sha256')
-      .update(`${userKey}:${sessionId}`)
-      .digest('hex');
-    const db = getFirestore(initializeApp({ projectId: 'demo-test' }, 'kit'));
-    const lockRef = db.collection('genkit-agent-locks').doc(lockId);
+    const lockRef = db()
+      .collection('agent-kit-locks')
+      .doc(lockId(uid, sessionId));
 
     const sentAt = Date.now();
     const turn = chat.send('wait 3000');
@@ -282,5 +453,56 @@ describe('firebase-agent-kit params from config-<instance>/.env.<projectId>', ()
     });
     expect(res.status).toBe(400);
     expect(await res.json()).toMatchObject({ status: 'FAILED_PRECONDITION' });
+  });
+});
+
+describe('firebase-agent-kit middleware from the prompt use: list', () => {
+  test('use: [skills] gives the model the use_skill tool', async () => {
+    const { idToken } = await signUp();
+    const chat = client('skilled', idToken).chat();
+    expect((await chat.send('tools')).text).toBe('use_skill');
+  });
+
+  test('use: [skills] lists the skills of skills/<instance id>/ in the system prompt', async () => {
+    const { idToken } = await signUp();
+    const system = (await client('skilled', idToken).chat().send('prompt'))
+      .text;
+    expect(system.startsWith('You are the SKILLED agent.')).toBe(true);
+    expect(system).toContain('<skills>');
+    expect(system).toContain(' - refunds - How to handle a refund request.');
+  });
+
+  test('use_skill returns the text of the SKILL.md file', async () => {
+    const { idToken } = await signUp();
+    const skill = await readFile(
+      join(import.meta.dirname, 'app/skills/skilled/refunds/SKILL.md'),
+      'utf8',
+    );
+    const res = await client('skilled', idToken)
+      .chat()
+      .send('call use_skill {"skillName":"refunds"}');
+    expect(res.text).toBe(`tool result: ${JSON.stringify(skill)}`);
+  });
+
+  test('an instance whose prompt does not use skills gets no use_skill tool or skills block', async () => {
+    const { idToken } = await signUp();
+    const chat = client('sales', idToken).chat();
+    expect((await chat.send('tools')).text).toBe('quotePrice');
+    expect((await chat.send('prompt')).text).toBe('You are the SALES agent.');
+  });
+
+  test('use: retry retries a failed model call', async () => {
+    const { idToken } = await signUp();
+    const key = randomUUID();
+    const res = await client('retried', idToken).chat().send(`flaky ${key}`);
+    expect(res.text).toBe(`flaky ${key} recovered`);
+  });
+
+  test('without retry the same model failure fails the turn', async () => {
+    const { idToken } = await signUp();
+    const key = randomUUID();
+    await expect(
+      client('sales', idToken).chat().send(`flaky ${key}`),
+    ).rejects.toThrow(`flaky ${key} failed`);
   });
 });

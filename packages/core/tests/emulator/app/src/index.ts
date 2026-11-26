@@ -80,3 +80,15 @@ const agent = ai.defineAgent({
 export const testAgent = onAgentRequest(agent, {
   httpsOptions: { timeoutSeconds: 60 },
 });
+
+const scopedAgent = (scope: string) =>
+  onAgentRequest(
+    ai.defineAgent({
+      name: `${scope}Agent`,
+      model: 'test/scripted',
+      store: createUserScopedStore({ scope }),
+    }),
+  );
+
+export const alphaAgent = scopedAgent('alpha');
+export const betaAgent = scopedAgent('beta');

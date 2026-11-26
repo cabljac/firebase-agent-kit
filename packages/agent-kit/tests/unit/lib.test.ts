@@ -49,7 +49,13 @@ describe('findPromptAgentProblems', () => {
   test('reports a missing prompt', async () => {
     const { ai } = setup();
     await expect(findPromptAgentProblems(ai.registry, 'nope')).resolves.toEqual(
-      { missingPrompt: true, missingTools: [] },
+      {
+        missingPrompt: true,
+        missingTools: [],
+        unknownMiddleware: [],
+        useProblems: [],
+        skillProblems: [],
+      },
     );
   });
 
@@ -58,7 +64,13 @@ describe('findPromptAgentProblems', () => {
     defineTool('userTool');
     definePrompt('typo', ['lookupOrdr', 'userTool', 'quotePrise']);
     await expect(findPromptAgentProblems(ai.registry, 'typo')).resolves.toEqual(
-      { missingPrompt: false, missingTools: ['lookupOrdr', 'quotePrise'] },
+      {
+        missingPrompt: false,
+        missingTools: ['lookupOrdr', 'quotePrise'],
+        unknownMiddleware: [],
+        useProblems: [],
+        skillProblems: [],
+      },
     );
   });
 });
@@ -223,6 +235,9 @@ describe('createPromptCheck', () => {
         instanceId: 'typo',
         missingPrompt: false,
         missingTools: ['lookupOrdr'],
+        unknownMiddleware: [],
+        useProblems: [],
+        skillProblems: [],
         knownTools: ['lookupOrder', 'userTool'],
       },
     );
@@ -259,6 +274,9 @@ describe('createPromptCheck', () => {
         instanceId: 'missing',
         missingPrompt: true,
         missingTools: [],
+        unknownMiddleware: [],
+        useProblems: [],
+        skillProblems: [],
         knownTools: [],
       },
     );

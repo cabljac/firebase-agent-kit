@@ -1,0 +1,6 @@
+---
+model: test/scripted
+use: [skills]
+---
+{{role "system"}}
+You are the BADSKILL agent.

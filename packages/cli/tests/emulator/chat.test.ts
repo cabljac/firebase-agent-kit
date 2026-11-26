@@ -59,13 +59,10 @@ async function until(check: () => Promise<boolean>, what: string) {
 
 /** True while the turn lock of `sessionId` exists in the Firestore emulator. */
 async function lockHeld(sessionId: string): Promise<boolean> {
-  const userKey = createHash('sha256')
-    .update(JSON.stringify([null, tokens.user.uid]))
-    .digest('hex');
-  const id = createHash('sha256')
-    .update(`${userKey}:${sessionId}`)
-    .digest('hex');
-  const res = await fetch(`${FIRESTORE}/genkit-agent-locks/${id}`, {
+  const sha256 = (s: string) => createHash('sha256').update(s).digest('hex');
+  const userKey = sha256(JSON.stringify([null, tokens.user.uid]));
+  const id = sha256(`${userKey}:${sessionId}`);
+  const res = await fetch(`${FIRESTORE}/agent-kit-locks/${id}`, {
     headers: { Authorization: 'Bearer owner' },
   });
   return res.status === 200;
