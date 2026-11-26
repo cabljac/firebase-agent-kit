@@ -1,6 +1,8 @@
 import {
   createUserScopedStore,
+  defineDetachedTurns,
   onAgentRequest,
+  onAgentTask,
 } from '@cabljac/firebase-agent-kit-core';
 import { vertexAI } from '@genkit-ai/google-genai';
 import { getApps, initializeApp } from 'firebase-admin/app';
@@ -21,7 +23,10 @@ import {
   withLazyLocation,
 } from './lib.js';
 
-export type { AgentRequestContext } from '@cabljac/firebase-agent-kit-core';
+export type {
+  AgentAuthContext,
+  AgentRequestContext,
+} from '@cabljac/firebase-agent-kit-core';
 export type { KitGenkit, KitToolFn } from './lib.js';
 /** Genkit's Zod, for the schemas of tools defined with `ai.defineTool`. */
 export { z };
@@ -34,8 +39,14 @@ requiresAPI(
   'firestore.googleapis.com',
   'Stores agent sessions and per-session turn locks.',
 );
+requiresAPI(
+  'cloudtasks.googleapis.com',
+  'Queues detached agent turns for the agentWorker function.',
+);
 requiresRole('roles/aiplatform.user');
 requiresRole('roles/datastore.user');
+requiresRole('roles/cloudtasks.enqueuer');
+requiresRole('roles/run.invoker');
 
 const corsOrigins = defineList('CORS_ORIGINS', {
   label: 'Allowed browser origins',
@@ -102,6 +113,28 @@ const vertexLocation = defineString('VERTEX_LOCATION', {
   },
 });
 
+const detachedTurns = defineBoolean('DETACHED_TURNS', {
+  label: 'Detached turns (experimental)',
+  description:
+    'If enabled, a client can send a turn with detach: true. The turn runs in the agentWorker function, through Cloud Tasks, and the client follows it with its snapshot id. If disabled, such a turn gets 400 and agentWorker refuses work.',
+  default: false,
+  input: select({ Enabled: true, Disabled: false }),
+});
+
+const workerTimeoutSeconds = defineInt('WORKER_TIMEOUT_SECONDS', {
+  label: 'Detached turn timeout in seconds',
+  description:
+    'How long one detached turn can run in agentWorker, from 60 to 1800. The worker aborts the turn 20 seconds before this.',
+  default: 540,
+  input: {
+    text: {
+      example: '540',
+      validationRegex: /^(?:[6-9]\d|[1-9]\d{2}|1[0-7]\d{2}|1800)$/,
+      validationErrorMessage: 'Enter a whole number from 60 to 1800.',
+    },
+  },
+});
+
 const instanceId = process.env.FIREBASE_KIT_INSTANCE_ID ?? 'default';
 
 if (getApps().length === 0) initializeApp();
@@ -119,15 +152,23 @@ const toolNames = new Set<string>();
  */
 export const ai: KitGenkit = createKitGenkit(instance, toolNames);
 
+const store = createUserScopedStore();
 const kitAgent = instance.definePromptAgent({
   promptName: instanceId,
-  store: createUserScopedStore(),
+  store,
+});
+const detach = defineDetachedTurns({
+  queue: 'agentWorker',
+  store,
+  enabled: detachedTurns,
+  timeoutSeconds: workerTimeoutSeconds,
+  instanceId,
 });
 const promptCheck = createPromptCheck({
   registry: instance.registry,
   instanceId,
   knownTools: () => toolNames,
-  booleanParams: [enforceAppCheck.name],
+  booleanParams: [enforceAppCheck.name, detachedTurns.name],
 });
 checkAtColdStart(promptCheck);
 
@@ -139,4 +180,14 @@ export const agent = onAgentRequest(kitAgent, {
   httpsOptions: { cors: corsOrigins, timeoutSeconds, memory },
   enforceAppCheck,
   authorize: promptCheck,
+  detach,
+});
+
+/**
+ * The instance's detached turn worker, run by Cloud Tasks. It refuses every
+ * task unless the `DETACHED_TURNS` param is `true`.
+ */
+export const agentWorker = onAgentTask(kitAgent, detach, {
+  memory,
+  rateLimits: { maxConcurrentDispatches: 10 },
 });

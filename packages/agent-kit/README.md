@@ -103,12 +103,17 @@ Use a `.env.<projectId>` file, not a plain `.env`. `firebase functions:kits:unin
 
 The kit declares these roles and APIs:
 
-| Role / API                  | Why                                                         |
-| --------------------------- | ----------------------------------------------------------- |
-| `roles/aiplatform.user`     | Call Gemini models on Vertex AI for agent turns.            |
-| `roles/datastore.user`      | Read and write the sessions and the turn locks.             |
-| `aiplatform.googleapis.com` | Vertex AI, for the model calls.                             |
-| `firestore.googleapis.com`  | Firestore, for the sessions and the per-session turn locks. |
+| Role / API                  | Why                                                                          |
+| --------------------------- | ---------------------------------------------------------------------------- |
+| `roles/aiplatform.user`     | Call Gemini models on Vertex AI for agent turns.                             |
+| `roles/datastore.user`      | Read and write the sessions, the turn locks and the detached runs.           |
+| `roles/cloudtasks.enqueuer` | Enqueue detached turns for `agentWorker`.                                    |
+| `roles/run.invoker`         | Let Cloud Tasks call `agentWorker`.                                          |
+| `aiplatform.googleapis.com` | Vertex AI, for the model calls.                                              |
+| `firestore.googleapis.com`  | Firestore, for the sessions and the per-session turn locks.                  |
+| `cloudtasks.googleapis.com` | Cloud Tasks, for detached turns. Declared even when `DETACHED_TURNS` is off. |
+
+The detached turn worker also reads the user with the Admin SDK (`getAuth().getUser`). Signing the task's OIDC token can need `roles/iam.serviceAccountUser` on the kit's service account. These two are not declared yet; check them on a real deploy before you turn on `DETACHED_TURNS`.
 
 The first deploy creates a `firebase-fn-*` service account for the kit, grants it these roles at the project level, enables the APIs and attaches the account to the function of every instance. So the account that deploys needs `iam.serviceAccounts.create` and `resourcemanager.projects.setIamPolicy` (for example through `roles/owner`, or `roles/iam.serviceAccountAdmin` and `roles/resourcemanager.projectIamAdmin`).
 
@@ -184,9 +189,9 @@ In an ES module codebase, every `import` and `export ... from` runs before the c
 
 The `timeoutSeconds` and `memory` of `setGlobalOptions` do not apply to the kit's function. The `TIMEOUT_SECONDS` and `MEMORY` params set them.
 
-### `agent` is a reserved export name
+### `agent` and `agentWorker` are reserved export names
 
-The kit exports its function as `agent`. Do not export anything else named `agent` from the wrapper. A local export with that name silently replaces the kit's function.
+The kit exports its functions as `agent` and `agentWorker`. Do not export anything else with these names from the wrapper. A local export with one of them silently replaces the kit's function.
 
 ## Deploy
 
@@ -208,6 +213,13 @@ The production URL is:
 https://<region>-<project>.cloudfunctions.net/kit-<instance id>-agent
 ```
 
+Every deploy also creates `kit-<instance id>-agentWorker`, a Cloud Tasks function, and its task queue. Params cannot change which functions a kit exports, so the worker is deployed even with `DETACHED_TURNS=false`. It then refuses every task and costs nothing while idle. Before you turn detached turns on, set the TTL policy for the run documents:
+
+```sh
+gcloud firestore fields ttls update expireAt \
+  --collection-group=agent-kit-runs --enable-ttl
+```
+
 ### Run it locally
 
 Model calls go to Vertex AI, so use a real project (not a `demo-` project) with the Vertex AI API on, and Application Default Credentials:
@@ -223,13 +235,15 @@ The instance URL is `http://127.0.0.1:5001/<project>/<region>/kit-<instance id>-
 
 Each instance has its own values for these params, in `config-<instance>/.env.<projectId>`:
 
-| Param               | Type            | Default       | Description                                                                                                                                                                                                                                |
-| ------------------- | --------------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `CORS_ORIGINS`      | list of strings | empty         | The web origins that can call the instance from a browser. This is the `cors` option of the function. Empty means no CORS headers, so browsers cannot call. Server clients do not need it.                                                 |
-| `TIMEOUT_SECONDS`   | integer, 1-3600 | `60`          | The function timeout. The turn lock lease is this value plus 30 seconds.                                                                                                                                                                   |
-| `MEMORY`            | integer, in MiB | `256`         | The function memory. The CLI offers 256, 512, 1024, 2048 and 4096.                                                                                                                                                                         |
-| `ENFORCE_APP_CHECK` | boolean         | `false`       | Exactly `true` or `false`. When `true`, every request also needs a valid App Check token in the `X-Firebase-AppCheck` header, or it gets 403 `PERMISSION_DENIED`. Any other value fails the [configuration checks](#configuration-checks). |
-| `VERTEX_LOCATION`   | string          | `us-central1` | The Vertex AI location for model calls. It can differ from the function region. Use `global` for models that only the global endpoint serves.                                                                                              |
+| Param                    | Type             | Default       | Description                                                                                                                                                                                                                                                                       |
+| ------------------------ | ---------------- | ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `CORS_ORIGINS`           | list of strings  | empty         | The web origins that can call the instance from a browser. This is the `cors` option of the function. Empty means no CORS headers, so browsers cannot call. Server clients do not need it.                                                                                        |
+| `TIMEOUT_SECONDS`        | integer, 1-3600  | `60`          | The function timeout. The turn lock lease is this value plus 30 seconds.                                                                                                                                                                                                          |
+| `MEMORY`                 | integer, in MiB  | `256`         | The function memory. The CLI offers 256, 512, 1024, 2048 and 4096.                                                                                                                                                                                                                |
+| `ENFORCE_APP_CHECK`      | boolean          | `false`       | Exactly `true` or `false`. When `true`, every request also needs a valid App Check token in the `X-Firebase-AppCheck` header, or it gets 403 `PERMISSION_DENIED`. Any other value fails the [configuration checks](#configuration-checks).                                        |
+| `VERTEX_LOCATION`        | string           | `us-central1` | The Vertex AI location for model calls. It can differ from the function region. Use `global` for models that only the global endpoint serves.                                                                                                                                     |
+| `DETACHED_TURNS`         | boolean          | `false`       | Experimental. Exactly `true` or `false`. When `true`, a turn with `detach: true` runs in `agentWorker` through Cloud Tasks. When `false`, it gets 400 `FAILED_PRECONDITION` and the worker refuses work. Any other value fails the [configuration checks](#configuration-checks). |
+| `WORKER_TIMEOUT_SECONDS` | integer, 60-1800 | `540`         | The timeout of `agentWorker`, so the longest a detached turn can run. The worker aborts the turn 20 seconds before it.                                                                                                                                                            |
 
 A full file looks like this:
 
@@ -240,6 +254,8 @@ TIMEOUT_SECONDS=120
 MEMORY=512
 ENFORCE_APP_CHECK=false
 VERTEX_LOCATION=us-central1
+DETACHED_TURNS=false
+WORKER_TIMEOUT_SECONDS=540
 ```
 
 To change a value, edit the file and deploy again.
@@ -257,6 +273,8 @@ An empty list makes firebase-functions log a warning on every request, except in
 **Vertex AI location.** The default `VERTEX_LOCATION` is `us-central1` for every function region, so a function in an EU region still sends model traffic to `us-central1` until you change it.
 
 **`ENFORCE_APP_CHECK`** works in the emulator only with a real project and the App Check debug provider.
+
+**`DETACHED_TURNS`** is experimental. With it on, keep `TIMEOUT_SECONDS` at 60 or more: the turn route waits up to 40 seconds for the worker. See [Detached turns](https://github.com/cabljac/firebase-agent-kit/tree/main/packages/core#detached-turns-experimental) for how they work, and for their limits: a 30-minute cap, claims frozen at enqueue with a user check when the worker starts, no raw ID token in the worker, and App Check, `authorize` and the configuration checks only when the turn is sent. In a detached turn, a tool's `context.auth` has `uid` and `token` but no `rawToken`.
 
 ### Configuration checks
 
@@ -334,7 +352,7 @@ For a browser client, set `CORS_ORIGINS` to your web origins and deploy again. S
 - Build data paths from `context.auth.uid`. Never build them from model output alone.
 - Keep tool input schemas narrow.
 - Use `ai.defineInterrupt` to get user approval before a tool writes or spends.
-- Keep the four collections the kit writes closed to client SDKs: `genkit-agent-sessions`, `genkit-agent-sessions-pointers`, `genkit-agent-sessions-shards` (the message history) and `genkit-agent-locks`. Your Firestore rules must deny all client reads and writes there:
+- Keep the five collections the kit writes closed to client SDKs: `genkit-agent-sessions`, `genkit-agent-sessions-pointers`, `genkit-agent-sessions-shards` (the message history), `genkit-agent-locks` and `agent-kit-runs` (detached runs). Your Firestore rules must deny all client reads and writes there:
 
   ```
   match /genkit-agent-sessions/{document=**} {
@@ -349,6 +367,9 @@ For a browser client, set `CORS_ORIGINS` to your web origins and deploy again. S
   match /genkit-agent-locks/{document=**} {
     allow read, write: if false;
   }
+  match /agent-kit-runs/{document=**} {
+    allow read, write: if false;
+  }
   ```
 
   Firestore allows a request when any rule allows it. A broad rule such as `match /{document=**} { allow read: if request.auth != null; }` lets every signed-in user read every user's sessions and message history, whatever the rules above say.
@@ -358,19 +379,20 @@ For a browser client, set `CORS_ORIGINS` to your web origins and deploy again. S
 The main entry (`@cabljac/firebase-agent-kit`) exports:
 
 - `agent`: the HTTPS function of the instance. Re-export it with `export * from '@cabljac/firebase-agent-kit'`.
+- `agentWorker`: the Cloud Tasks function that runs detached turns. The same `export *` re-exports it.
 - `ai`: the kit's Genkit instance, typed `KitGenkit`. `ai.defineTool` and `ai.defineInterrupt` are described in [Customise](#customise). Every other member is Genkit's own.
 - `z`: Genkit's Zod, for tool schemas.
-- Types: `KitGenkit`, `KitToolFn` (the tool function of `ai.defineTool`) and `AgentRequestContext` (the context with `auth.uid` as a string).
+- Types: `KitGenkit`, `KitToolFn` (the tool function of `ai.defineTool`), `AgentAuthContext` (what a tool gets in `context`: `auth.uid` as a string and the decoded `auth.token`) and `AgentRequestContext` (the full context of an HTTP request).
 
 The main entry reads the instance id and defines the params when it loads, so use it from Firebase deploy, the emulator or the runtime. To build your own function instead, use [`@cabljac/firebase-agent-kit-core`](https://github.com/cabljac/firebase-agent-kit/tree/main/packages/core#readme).
 
 ## Limits
 
-- **No detached turns.** A request with `detach: true` gets 400 `FAILED_PRECONDITION`, because Cloud Functions throttles CPU after the response is sent.
+- **Detached turns are experimental and off by default.** See `DETACHED_TURNS` in [Configuration](#configuration).
 - **Denied reads return 500.** When a user asks for a snapshot that is not theirs, `@genkit-ai/express` returns 500 for the `NOT_FOUND` error.
 - **No session list.** There is no route that lists sessions. Clients must keep their own session ids.
 - **Sessions are scoped by user, not by instance.** All instances share the session collections, and a session is keyed only by the user. So a client can load a session of one instance into another instance, for the same user only. The other instance then continues that history with its own prompt and tools.
-- **No cleanup.** Documents in all four collections stay in Firestore until you delete them. The kit sets no TTL. A turn deletes its lock document when it ends, but a lock from a turn that did not end cleanly stays.
+- **No cleanup.** Documents in the session and lock collections stay in Firestore until you delete them. The kit sets no TTL on them; run documents have an `expireAt` field for a TTL policy. A turn deletes its lock document when it ends, but a lock from a turn that did not end cleanly stays.
 - **No multipart tools.** `ai.defineTool` takes no `multipart: true` config.
 - **One model provider.** The kit registers only the Vertex AI plugin. Use `ai.defineModel` for anything else.
 

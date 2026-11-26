@@ -197,8 +197,11 @@ describe('firebase-agent-kit params from config-<instance>/.env.<projectId>', ()
     const chat = client('sales', idToken).chat();
     await chat.send('prompt');
     const sessionId = defined(chat.sessionId, 'sessionId');
+    const userKey = createHash('sha256')
+      .update(JSON.stringify([null, uid]))
+      .digest('hex');
     const lockId = createHash('sha256')
-      .update(`${uid}:${sessionId}`)
+      .update(`${userKey}:${sessionId}`)
       .digest('hex');
     const db = getFirestore(initializeApp({ projectId: 'demo-test' }, 'kit'));
     const lockRef = db.collection('genkit-agent-locks').doc(lockId);
@@ -260,5 +263,24 @@ describe('firebase-agent-kit params from config-<instance>/.env.<projectId>', ()
         message: 'AppCheck token is required',
       },
     });
+  });
+
+  test('a detached turn gets 400 FAILED_PRECONDITION while DETACHED_TURNS is off', async () => {
+    const { idToken } = await signUp();
+    const res = await fetch(instanceUrl('support'), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${idToken}`,
+      },
+      body: JSON.stringify({
+        data: {
+          message: { role: 'user', content: [{ text: 'prompt' }] },
+          detach: true,
+        },
+      }),
+    });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({ status: 'FAILED_PRECONDITION' });
   });
 });

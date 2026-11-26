@@ -45,9 +45,35 @@ async function discover(instanceId: string) {
 }
 
 describe('deploy discovery', () => {
-  test('finds only the agent function in a wrapper that re-exports ai', async () => {
+  test('finds only the agent and agentWorker functions in a wrapper that re-exports ai', async () => {
     const { manifest } = await discover('support');
-    expect(Object.keys(manifest.endpoints)).toEqual(['agent']);
+    expect(Object.keys(manifest.endpoints).sort()).toEqual([
+      'agent',
+      'agentWorker',
+    ]);
+  });
+
+  test('declares agentWorker as a task queue function bound to the worker params', async () => {
+    const { manifest } = await discover('support');
+    expect(manifest.endpoints.agentWorker).toMatchObject({
+      timeoutSeconds: '{{ params.WORKER_TIMEOUT_SECONDS }}',
+      availableMemoryMb: '{{ params.MEMORY }}',
+      taskQueueTrigger: {
+        retryConfig: { maxAttempts: 1 },
+        rateLimits: { maxConcurrentDispatches: 10 },
+      },
+    });
+  });
+
+  test('declares the Cloud Tasks API and the enqueue and invoke roles', async () => {
+    const { manifest } = await discover('support');
+    expect(manifest.requiredAPIs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ api: 'cloudtasks.googleapis.com' }),
+      ]),
+    );
+    expect(JSON.stringify(manifest)).toContain('roles/cloudtasks.enqueuer');
+    expect(JSON.stringify(manifest)).toContain('roles/run.invoker');
   });
 
   test('declares the kit params and binds the function options to them', async () => {
@@ -67,6 +93,8 @@ describe('deploy discovery', () => {
       ['MEMORY', 'int'],
       ['ENFORCE_APP_CHECK', 'boolean'],
       ['VERTEX_LOCATION', 'string'],
+      ['DETACHED_TURNS', 'boolean'],
+      ['WORKER_TIMEOUT_SECONDS', 'int'],
     ]);
     expect(manifest.params).toEqual(
       expect.arrayContaining([
@@ -77,6 +105,11 @@ describe('deploy discovery', () => {
         expect.objectContaining({
           name: 'VERTEX_LOCATION',
           default: 'us-central1',
+        }),
+        expect.objectContaining({ name: 'DETACHED_TURNS', default: false }),
+        expect.objectContaining({
+          name: 'WORKER_TIMEOUT_SECONDS',
+          default: 540,
         }),
       ]),
     );

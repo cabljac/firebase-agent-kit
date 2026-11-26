@@ -1,5 +1,5 @@
 import {
-  type AgentRequestContext,
+  type AgentAuthContext,
   isAuthedContext,
 } from '@cabljac/firebase-agent-kit-core';
 import type { ToolFn, ToolFnOptions, ToolRunOptions } from '@genkit-ai/ai/tool';
@@ -40,12 +40,14 @@ export interface PromptValidationOptions {
 
 /**
  * The function of a tool defined with `ai.defineTool`: Genkit's tool
- * function, with the caller's Firebase Auth in `context.auth`.
+ * function, with the caller's Firebase Auth in `context.auth`. In a detached
+ * turn there is no raw ID token, so `context.auth` holds only `uid` and the
+ * decoded `token` claims.
  */
 export type KitToolFn<I extends z.ZodTypeAny, O extends z.ZodTypeAny> = (
   input: z.infer<I>,
   options: Omit<ToolFnOptions & ToolRunOptions, 'context'> & {
-    context: AgentRequestContext;
+    context: AgentAuthContext;
   },
 ) => Promise<z.infer<O>>;
 
