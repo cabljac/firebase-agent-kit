@@ -141,6 +141,31 @@ importers:
         specifier: 5.9.3
         version: 5.9.3
 
+  packages/core/tests/detach/app:
+    dependencies:
+      '@cabljac/firebase-agent-kit-core':
+        specifier: workspace:*
+        version: link:../../..
+      '@genkit-ai/express':
+        specifier: 1.44.0
+        version: 1.44.0(express@5.3.0)(genkit@1.44.0(@google-cloud/firestore@9.4.1)(firebase-admin@14.5.1))
+      '@genkit-ai/firebase':
+        specifier: 1.44.0
+        version: 1.44.0(@google-cloud/firestore@9.4.1)(firebase-admin@14.5.1)(genkit@1.44.0(@google-cloud/firestore@9.4.1)(firebase-admin@14.5.1))
+      firebase-admin:
+        specifier: 14.5.1
+        version: 14.5.1
+      firebase-functions:
+        specifier: 7.4.0
+        version: 7.4.0(firebase-admin@14.5.1)
+      genkit:
+        specifier: 1.44.0
+        version: 1.44.0(@google-cloud/firestore@9.4.1)(firebase-admin@14.5.1)
+    devDependencies:
+      typescript:
+        specifier: 5.9.3
+        version: 5.9.3
+
   packages/core/tests/emulator/app:
     dependencies:
       '@cabljac/firebase-agent-kit-core':

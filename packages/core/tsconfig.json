@@ -4,5 +4,11 @@
     "outDir": "lib",
     "rootDir": "."
   },
-  "include": ["src", "tests/unit", "tests/emulator/*.ts", "vitest*.config.ts"]
+  "include": [
+    "src",
+    "tests/unit",
+    "tests/emulator/*.ts",
+    "tests/detach/*.ts",
+    "vitest*.config.ts"
+  ]
 }

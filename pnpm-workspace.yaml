@@ -1,6 +1,7 @@
 packages:
   - "packages/core"
   - "packages/core/tests/emulator/app"
+  - "packages/core/tests/detach/app"
   - "packages/agent-kit"
   - "packages/agent-kit/tests/emulator/app"
   - "packages/cli"
