@@ -3,6 +3,7 @@ import type { AddressInfo } from 'node:net';
 import { fakeToken } from '@genkit-ai/firebase/context';
 import express from 'express';
 import type { HttpsOptions } from 'firebase-functions/v2/https';
+import { GenkitError } from 'genkit';
 import { genkit, InMemorySessionStore } from 'genkit/beta';
 import { onAgentRequest } from '../../src/handler.js';
 import type { AgentRequestOptions, TurnLock } from '../../src/types.js';
@@ -21,8 +22,8 @@ export interface ServedFunction {
 
 /**
  * Serves the Cloud Function that `onAgentRequest` returns, with the real
- * Firebase auth context provider and a lock that is always held, so a turn
- * that passes auth answers 409 without running the agent.
+ * Firebase auth context provider and a lock whose acquire fails with
+ * `ABORTED`, so a turn that passes auth answers 409 without running the agent.
  * @param httpsOptions Passed to `onAgentRequest`.
  * @param options Other `onAgentRequest` options.
  */
@@ -39,8 +40,10 @@ export async function serveAgentFunction(
   const lock: TurnLock = {
     acquire: async (_key, { leaseMs }) => {
       leases.push(leaseMs);
-      return null;
+      throw new GenkitError({ status: 'ABORTED', message: 'held' });
     },
+    renew: async () => false,
+    release: async () => {},
   };
   const fn = onAgentRequest(agent, {
     ...options,

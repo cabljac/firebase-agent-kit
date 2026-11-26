@@ -1,8 +1,9 @@
 import type { FirebaseContext } from '@genkit-ai/firebase/context';
+import type { DecodedIdToken } from 'firebase-admin/auth';
 import type { Firestore } from 'firebase-admin/firestore';
 import type { Expression } from 'firebase-functions/params';
 import type { HttpsOptions } from 'firebase-functions/v2/https';
-import type { AgentInit, AgentInput } from 'genkit/beta';
+import type { AgentInit, AgentInput, SessionStore } from 'genkit/beta';
 
 /** Options for {@link createUserScopedStore}. */
 export interface UserScopedStoreOptions {
@@ -27,8 +28,19 @@ export interface TurnLock {
   /**
    * Acquires the lock for `key`, or returns `null` when another live holder
    * owns it. An expired lease (older than its `leaseMs`) is taken over.
+   * `owner` names the holder; a random id is used when it is omitted.
    */
-  acquire(key: string, opts: { leaseMs: number }): Promise<TurnLease | null>;
+  acquire(
+    key: string,
+    opts: { leaseMs: number; owner?: string },
+  ): Promise<TurnLease | null>;
+  /**
+   * Extends the lease of `owner` on `key` to `leaseMs` from now. Resolves
+   * `false` when `owner` no longer holds the lock.
+   */
+  renew(key: string, owner: string, leaseMs: number): Promise<boolean>;
+  /** Releases `key` if `owner` still holds it. Never throws. */
+  release(key: string, owner: string): Promise<void>;
 }
 
 /** Options for {@link FirestoreTurnLock}. */
@@ -43,6 +55,50 @@ export interface FirestoreTurnLockOptions {
 export type AgentRequestContext = FirebaseContext & {
   auth: NonNullable<FirebaseContext['auth']>;
 };
+
+/**
+ * The authenticated caller of a turn, on the HTTP route and in the
+ * {@link onAgentTask} worker. The worker has no raw ID token, and its
+ * `token` holds the claims frozen at enqueue time with custom claims
+ * refreshed when the worker claimed the run.
+ */
+export interface AgentAuthContext {
+  auth: { uid: string; token: DecodedIdToken };
+}
+
+/** Options for {@link defineDetachedTurns}. */
+export interface DetachedTurnsOptions<S = unknown> {
+  /**
+   * The export name of the {@link onAgentTask} function, which is also its
+   * task queue. Inside a kit instance, firebase-admin adds the
+   * `kit-<instance>-` prefix.
+   */
+  queue: string;
+  /**
+   * The agent's own session store. The turn route writes through it to settle
+   * the snapshot of a detached turn whose worker died.
+   */
+  store: SessionStore<S>;
+  /**
+   * Turns detached turns on or off. Defaults to `true`. A params expression
+   * is read on each request and each task. When off, a turn with
+   * `detach: true` gets 400 `FAILED_PRECONDITION` and the worker refuses work.
+   */
+  enabled?: boolean | Expression<boolean>;
+  /**
+   * The worker's timeout in seconds. Defaults to 540 and is capped at 1800.
+   */
+  timeoutSeconds?: number | Expression<number>;
+  /** The kit instance id, recorded on each run; a worker refuses runs of another instance. */
+  instanceId?: string;
+  /**
+   * The turn lock, used for every turn of the agent. Defaults to a
+   * {@link FirestoreTurnLock}.
+   */
+  lock?: TurnLock;
+  /** Where runs are stored. The collection defaults to `agent-kit-runs`. */
+  runs?: { collection?: string; firestore?: Firestore };
+}
 
 /** A route that {@link onAgentRequest} serves. `turn` is the main route. */
 export type AgentRoute = 'turn' | 'getSnapshot' | 'waitForSnapshot' | 'abort';
@@ -66,7 +122,7 @@ export interface BeforeTurnRequest {
 }
 
 /** Options for {@link onAgentRequest}. */
-export interface AgentRequestOptions {
+export interface AgentRequestOptions<S = unknown> {
   /**
    * Passed through to `onRequest`. Set `cors` here for browser clients. The
    * function's timeout (`timeoutSeconds` here, else from `setGlobalOptions`,
@@ -96,4 +152,31 @@ export interface AgentRequestOptions {
    * answers 500.
    */
   beforeTurn?: (turn: BeforeTurnRequest) => void | Promise<void>;
+  /**
+   * Accepts turns with `detach: true` and hands them to the
+   * {@link onAgentTask} worker built from the same object. Without it, such a
+   * turn gets 400 `FAILED_PRECONDITION`. Do not set `lock` with it: the lock
+   * comes from the detach config.
+   */
+  detach?: DetachedTurns<S>;
+}
+
+/**
+ * The resolved detached turn config from {@link defineDetachedTurns}. Pass
+ * the same object to {@link onAgentRequest} and {@link onAgentTask}.
+ */
+export interface DetachedTurns<S = unknown> {
+  readonly queue: string;
+  readonly store: SessionStore<S>;
+  readonly instanceId: string | null;
+  readonly lock: TurnLock;
+  readonly runsCollection: string;
+  /** Whether detached turns are on, read now. */
+  enabled(): boolean;
+  /** The worker timeout in seconds, read now and capped at 1800. */
+  timeoutSeconds(): number;
+  /** The worker timeout for the function definition. */
+  readonly functionTimeout: number | Expression<number>;
+  /** Firestore for runs, resolved on first use. */
+  firestore(): Firestore;
 }

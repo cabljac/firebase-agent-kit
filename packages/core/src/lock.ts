@@ -26,10 +26,10 @@ export class FirestoreTurnLock implements TurnLock {
 
   async acquire(
     key: string,
-    opts: { leaseMs: number },
+    opts: { leaseMs: number; owner?: string },
   ): Promise<TurnLease | null> {
     const ref = this.ref(key);
-    const owner = randomUUID();
+    const owner = opts.owner ?? randomUUID();
     const acquired = await this.db().runTransaction(async (tx) => {
       const snap = await tx.get(ref);
       const now = Date.now();
@@ -49,15 +49,30 @@ export class FirestoreTurnLock implements TurnLock {
       release: async () => {
         if (released) return;
         released = true;
-        try {
-          await this.db().runTransaction(async (tx) => {
-            const snap = await tx.get(ref);
-            if (snap.exists && snap.get('owner') === owner) tx.delete(ref);
-          });
-        } catch (err) {
-          logger.error(`Failed to release turn lock for "${key}"`, err);
-        }
+        await this.release(key, owner);
       },
     };
+  }
+
+  async renew(key: string, owner: string, leaseMs: number): Promise<boolean> {
+    const ref = this.ref(key);
+    return this.db().runTransaction(async (tx) => {
+      const snap = await tx.get(ref);
+      if (!snap.exists || snap.get('owner') !== owner) return false;
+      tx.update(ref, { expiresAt: Date.now() + leaseMs });
+      return true;
+    });
+  }
+
+  async release(key: string, owner: string): Promise<void> {
+    const ref = this.ref(key);
+    try {
+      await this.db().runTransaction(async (tx) => {
+        const snap = await tx.get(ref);
+        if (snap.exists && snap.get('owner') === owner) tx.delete(ref);
+      });
+    } catch (err) {
+      logger.error(`Failed to release turn lock for "${key}"`, err);
+    }
   }
 }

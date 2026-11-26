@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { expressHandler } from '@genkit-ai/express';
 import {
   type FirebaseContext,
@@ -15,12 +16,21 @@ import { GenkitError } from 'genkit';
 import { type Agent, AgentInitSchema, AgentInputSchema } from 'genkit/beta';
 import type { ContextProvider, RequestData } from 'genkit/context';
 import {
+  acquireWithRetry,
+  busyError,
+  type DetachDeps,
+  defaultDetachDeps,
+  startDetachedTurn,
+} from './detach.js';
+import {
   assertNotDetach,
-  isAuthedContext,
-  resolveLockKey,
+  isRequestContext,
+  resolveSessionId,
   sendError,
 } from './guards.js';
+import { lockKey } from './keys.js';
 import { FirestoreTurnLock } from './lock.js';
+import { reapDeadTip } from './reaper.js';
 import type {
   AgentRequestOptions,
   AgentRoute,
@@ -35,6 +45,12 @@ export interface AgentAppDeps {
   contextProvider?: ContextProvider<FirebaseContext>;
   /** Returns the function's `timeoutSeconds`. Defaults to `opts.httpsOptions?.timeoutSeconds`. */
   timeoutSeconds?: () => HttpsOptions['timeoutSeconds'];
+  /** Returns the function's region, which is also the worker's. */
+  region?: () => string | undefined;
+  /** Replaces the seams of the detached turn route. */
+  detach?: Partial<DetachDeps>;
+  /** Waits between lock attempts. */
+  sleep?: (ms: number) => Promise<void>;
 }
 
 const DEFAULT_TIMEOUT_SECONDS = 60;
@@ -61,6 +77,11 @@ function toSeconds(timeout: HttpsOptions['timeoutSeconds']): number {
   return typeof seconds === 'number' && Number.isFinite(seconds) && seconds > 0
     ? seconds
     : DEFAULT_TIMEOUT_SECONDS;
+}
+
+function resolveRegion(region: unknown): string | undefined {
+  const value = region instanceof Expression ? region.value() : region;
+  return typeof value === 'string' && value ? value : undefined;
 }
 
 function resolveBoolean(value: boolean | Expression<boolean> | undefined) {
@@ -97,9 +118,15 @@ function isClientError(err: unknown): boolean {
  */
 export function createAgentApp<S>(
   agent: Agent<S>,
-  opts: AgentRequestOptions = {},
+  opts: AgentRequestOptions<S> = {},
   deps: AgentAppDeps = {},
 ): express.Express {
+  const detach = opts.detach;
+  if (detach && opts.lock !== undefined) {
+    throw new Error(
+      'onAgentRequest: do not set lock together with detach; set lock in defineDetachedTurns.',
+    );
+  }
   // Emulator ID tokens are unsigned and fail the debug skip-verification decoder.
   if (
     process.env.FUNCTIONS_EMULATOR === 'true' &&
@@ -123,9 +150,23 @@ export function createAgentApp<S>(
 
   let defaultLock: TurnLock | undefined;
   const getLock = (): TurnLock => {
+    if (detach) return detach.lock;
     if (opts.lock) return opts.lock;
     defaultLock ??= new FirestoreTurnLock();
     return defaultLock;
+  };
+  const sleep =
+    deps.sleep ??
+    ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  let detachDeps: DetachDeps | undefined;
+  const getDetachDeps = (): DetachDeps | undefined => {
+    if (!detach) return undefined;
+    detachDeps ??= {
+      ...defaultDetachDeps(detach, deps.region ?? (() => undefined)),
+      sleep,
+      ...deps.detach,
+    };
+    return detachDeps;
   };
 
   const route =
@@ -143,7 +184,7 @@ export function createAgentApp<S>(
       });
       try {
         const ctx = await contextProvider(toRequestData(req));
-        if (!isAuthedContext(ctx)) {
+        if (!isRequestContext(ctx)) {
           throw new GenkitError({
             status: 'UNAUTHENTICATED',
             message: 'Authentication is required.',
@@ -153,21 +194,44 @@ export function createAgentApp<S>(
         if (name === 'turn') {
           const { input, init } = parseTurn(req.body);
           await opts.beforeTurn?.({ context: ctx, input, init });
-          assertNotDetach(req.body?.data);
-          const key = await resolveLockKey(init, agent, ctx);
-          if (key && opts.lock !== false) {
-            const leaseMs = toSeconds(timeoutSeconds()) * 1000 + LEASE_GRACE_MS;
-            lease = await getLock().acquire(key, { leaseMs });
-            if (!lease) {
+          const detachDeps =
+            input.detach && detach?.enabled() ? getDetachDeps() : undefined;
+          if (!detachDeps) assertNotDetach(input);
+          let sessionId = await resolveSessionId(init, agent, ctx);
+          if (detach && detachDeps) {
+            if (!sessionId && init?.snapshotId) {
               throw new GenkitError({
-                status: 'ABORTED',
-                message: 'Another turn is running for this session.',
+                status: 'NOT_FOUND',
+                message: `Snapshot ${init.snapshotId} not found.`,
               });
             }
+            sessionId ??= randomUUID();
+            await startDetachedTurn({
+              req,
+              res,
+              context: ctx,
+              input,
+              init: { ...init, sessionId: init?.sessionId || sessionId },
+              sessionId,
+              detach,
+              deps: detachDeps,
+            });
+            return;
+          }
+          if (sessionId && opts.lock !== false) {
+            const leaseMs = toSeconds(timeoutSeconds()) * 1000 + LEASE_GRACE_MS;
+            lease = await acquireWithRetry(
+              getLock(),
+              lockKey(ctx.auth.uid, sessionId),
+              { leaseMs },
+              sleep,
+            );
+            if (!lease) throw busyError();
             if (closed) {
               void lease.release();
               lease = null;
             }
+            if (detach) await reapDeadTip(detach.store, sessionId, ctx);
           }
         }
         await expressHandler(action, { contextProvider: () => ctx })(
@@ -218,13 +282,14 @@ export function createAgentApp<S>(
  */
 export function onAgentRequest<S>(
   agent: Agent<S>,
-  opts: AgentRequestOptions = {},
+  opts: AgentRequestOptions<S> = {},
 ): HttpsFunction {
   const fn: HttpsFunction = onRequest(
     opts.httpsOptions ?? {},
     createAgentApp(agent, opts, {
       // The deployed value: httpsOptions merged over setGlobalOptions.
       timeoutSeconds: () => fn.__endpoint.timeoutSeconds,
+      region: () => resolveRegion(fn.__endpoint.region?.[0]),
     }),
   );
   return fn;

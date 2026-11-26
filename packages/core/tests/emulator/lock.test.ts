@@ -66,3 +66,42 @@ test('concurrent acquires yield exactly one lease', async () => {
   );
   expect(results.filter((r) => r !== null)).toHaveLength(1);
 });
+
+test('acquire takes the caller-supplied owner', async () => {
+  const lock = makeLock();
+  const lease = await lock.acquire('s1', { leaseMs: 60_000, owner: 'run-1' });
+  expect(lease?.owner).toBe('run-1');
+});
+
+test('renew extends the lease only for the owner', async () => {
+  const lock = makeLock();
+  await lock.acquire('s1', { leaseMs: 1_000, owner: 'run-1' });
+  expect(await lock.renew('s1', 'other', 60_000)).toBe(false);
+  expect(await lock.renew('s1', 'run-1', 60_000)).toBe(true);
+  await sleep(1_100);
+  expect(await lock.acquire('s1', { leaseMs: 1_000 })).toBeNull();
+});
+
+test('renew fails after another holder took over an expired lease', async () => {
+  const lock = makeLock();
+  await lock.acquire('s1', { leaseMs: 50, owner: 'run-1' });
+  await sleep(100);
+  expect(await lock.acquire('s1', { leaseMs: 60_000 })).not.toBeNull();
+  expect(await lock.renew('s1', 'run-1', 60_000)).toBe(false);
+});
+
+test('renew of a released lock fails', async () => {
+  const lock = makeLock();
+  await lock.acquire('s1', { leaseMs: 60_000, owner: 'run-1' });
+  await lock.release('s1', 'run-1');
+  expect(await lock.renew('s1', 'run-1', 60_000)).toBe(false);
+});
+
+test('release by key and owner leaves another owner alone', async () => {
+  const lock = makeLock();
+  await lock.acquire('s1', { leaseMs: 60_000, owner: 'run-1' });
+  await lock.release('s1', 'run-2');
+  expect(await lock.acquire('s1', { leaseMs: 60_000 })).toBeNull();
+  await lock.release('s1', 'run-1');
+  expect(await lock.acquire('s1', { leaseMs: 60_000 })).not.toBeNull();
+});
