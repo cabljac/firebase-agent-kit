@@ -13,7 +13,7 @@ const approveTransfer = ai.defineInterrupt({
   outputSchema: z.object({ approved: z.boolean() }),
 });
 
-ai.defineModel({ name: 'test/scripted' }, async (request) => {
+ai.defineModel({ name: 'test/scripted' }, async (request, sendChunk) => {
   const messages = request.messages;
   const last = messages[messages.length - 1];
   const reply = (text: string) => ({
@@ -56,6 +56,13 @@ ai.defineModel({ name: 'test/scripted' }, async (request) => {
     return reply(`user messages: ${users}`);
   }
   if (text.startsWith('echo ')) return reply(text.slice('echo '.length));
+  if (text.startsWith('stream ')) {
+    const words = text.slice('stream '.length).split(' ');
+    for (const [i, word] of words.entries()) {
+      sendChunk?.({ content: [{ text: i ? ` ${word}` : word }] });
+    }
+    return reply(words.join(' '));
+  }
   return reply('unknown command');
 });
 

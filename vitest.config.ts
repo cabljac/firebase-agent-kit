@@ -5,6 +5,7 @@ export default defineConfig({
     include: [
       'tests/unit/**/*.test.ts',
       'packages/agent-kit/tests/unit/**/*.test.ts',
+      'packages/cli/tests/unit/**/*.test.{ts,tsx}',
     ],
   },
 });

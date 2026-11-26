@@ -3,3 +3,4 @@ packages:
   - "tests/emulator/app"
   - "packages/agent-kit"
   - "packages/agent-kit/tests/emulator/app"
+  - "packages/cli"
