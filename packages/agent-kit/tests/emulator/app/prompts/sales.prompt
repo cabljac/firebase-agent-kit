@@ -1,0 +1,6 @@
+---
+model: test/scripted
+tools: [quotePrice]
+---
+{{role "system"}}
+You are the SALES agent.

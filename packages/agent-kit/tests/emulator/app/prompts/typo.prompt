@@ -1,0 +1,6 @@
+---
+model: test/scripted
+tools: [lookupOrdr, userTool]
+---
+{{role "system"}}
+You are the TYPO agent.

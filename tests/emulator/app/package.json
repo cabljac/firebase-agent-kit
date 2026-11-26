@@ -1,0 +1,23 @@
+{
+  "name": "emulator-app",
+  "private": true,
+  "type": "module",
+  "main": "lib/index.js",
+  "engines": {
+    "node": "22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@genkit-ai/express": "1.44.0",
+    "@genkit-ai/firebase": "1.44.0",
+    "firebase-admin": "14.5.1",
+    "firebase-functions": "7.4.0",
+    "genkit": "1.44.0",
+    "genkit-agent-functions": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
+}
