@@ -3,6 +3,7 @@ import {
   type AgentChat,
   type MessageData,
   remoteAgent,
+  type SessionSnapshot,
   type ToolResponsePart,
 } from 'genkit/beta/client';
 import type { TokenSource } from './auth.js';
@@ -54,6 +55,9 @@ interface ToolRequestLike {
 }
 
 const isInterrupt = (part: ToolRequestLike) => !!part.metadata?.interrupt;
+
+const unsettled = (status: SessionSnapshot['status']) =>
+  status === 'pending' || status === 'aborting' || status === 'expired';
 
 /**
  * Builds the resume part that answers `interrupt` with `output`.
@@ -140,6 +144,28 @@ export class SessionLoadError extends Error {
 export interface LoadedSession {
   history: HistoryEntry[];
   pending: PendingInterrupt[];
+  /** The snapshot id of a detached turn that is still running. */
+  running?: string;
+  /** The snapshot id of a detached turn whose worker stopped. */
+  expired?: string;
+}
+
+/** How a detached turn ended. */
+export interface DetachedOutcome {
+  snapshotId: string;
+  status: 'completed' | 'failed' | 'aborted' | 'expired';
+  /** The agent's last reply, when the turn completed. */
+  text: string;
+  /** The error message of a failed or aborted turn. */
+  detail?: string;
+}
+
+/** Callbacks for a detached turn. */
+export interface DetachHandlers {
+  /** Called once the server accepted the turn. */
+  onDetached?: (snapshotId: string) => void;
+  /** Stops waiting; the turn keeps running on the server. */
+  signal?: AbortSignal;
 }
 
 /** The conversation operations the chat screens use. */
@@ -157,6 +183,13 @@ export interface ChatSession {
   reload(): Promise<void>;
   /** Runs one turn and streams it to `handlers`. */
   runTurn(input: TurnInput, handlers?: TurnHandlers): Promise<TurnOutcome>;
+  /** Sends `message` as a detached turn and waits until it settles. */
+  detach(message: string, handlers?: DetachHandlers): Promise<DetachedOutcome>;
+  /** Waits until the detached turn `snapshotId` settles. */
+  waitDetached(
+    snapshotId: string,
+    signal?: AbortSignal,
+  ): Promise<DetachedOutcome>;
 }
 
 /** Options for {@link ChatCore}. */
@@ -213,8 +246,17 @@ export class ChatCore implements ChatSession {
     signal?: AbortSignal,
   ): Promise<LoadedSession> {
     let chat: AgentChat;
+    let messages: MessageData[];
+    let tip: SessionSnapshot | undefined;
     try {
-      chat = await this.agent.loadChat({ sessionId });
+      tip = await this.agent.getSnapshot({ sessionId });
+      if (!tip) throw new Error(`Snapshot session ${sessionId} not found.`);
+      chat = await this.agent.loadChat({ snapshotId: tip.snapshotId });
+      messages = chat.messages;
+      if (unsettled(tip.status) && tip.parentId) {
+        const parent = await this.agent.getSnapshot(tip.parentId);
+        messages = parent?.state?.messages ?? [];
+      }
     } catch (err) {
       throw new SessionLoadError(sessionId, err);
     }
@@ -222,9 +264,66 @@ export class ChatCore implements ChatSession {
     this.chat = chat;
     this.stale = false;
     await this.remember();
+    const live = tip.status === 'pending' || tip.status === 'aborting';
     return {
-      history: historyEntries(chat.messages),
-      pending: pendingInterrupts(chat.messages),
+      history: historyEntries(messages),
+      pending: unsettled(tip.status) ? [] : pendingInterrupts(messages),
+      ...(live && { running: tip.snapshotId }),
+      ...(tip.status === 'expired' && { expired: tip.snapshotId }),
+    };
+  }
+
+  /**
+   * Sends `message` as a detached turn, then waits until it settles. Rejects
+   * with the client error when the server refuses the turn, for example
+   * with a 409 while another turn holds the session.
+   * @param message The user's message.
+   * @param handlers Called when the turn starts; `signal` stops the wait.
+   */
+  async detach(
+    message: string,
+    handlers: DetachHandlers = {},
+  ): Promise<DetachedOutcome> {
+    if (this.stale) await this.reload();
+    const task = await this.chat.detach(message);
+    this.stale = true;
+    await this.remember();
+    handlers.onDetached?.(task.snapshotId);
+    return this.waitDetached(task.snapshotId, handlers.signal);
+  }
+
+  /**
+   * Waits until the detached turn `snapshotId` settles, then reloads the
+   * session so the next turn continues from it.
+   * @param snapshotId The detached turn's snapshot.
+   * @param signal Stops waiting; the turn keeps running on the server.
+   */
+  async waitDetached(
+    snapshotId: string,
+    signal?: AbortSignal,
+  ): Promise<DetachedOutcome> {
+    this.stale = true;
+    const snapshot = await this.agent.waitForSnapshot(snapshotId, {
+      abortSignal: signal,
+    });
+    if (!snapshot) throw new Error(`Snapshot ${snapshotId} not found.`);
+    const status =
+      snapshot.status === 'failed' ||
+      snapshot.status === 'aborted' ||
+      snapshot.status === 'expired'
+        ? snapshot.status
+        : 'completed';
+    const last = snapshot.state?.messages?.at(-1);
+    const text =
+      status === 'completed' && last?.role === 'model'
+        ? last.content.map((p) => p.text ?? '').join('')
+        : '';
+    await this.reload();
+    return {
+      snapshotId,
+      status,
+      text,
+      ...(snapshot.error?.message && { detail: snapshot.error.message }),
     };
   }
 

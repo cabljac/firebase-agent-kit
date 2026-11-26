@@ -107,3 +107,43 @@ test('prints the history of a resumed session', async () => {
   expect(out).toContain('you> earlier');
   expect(out).toContain('agent> reply');
 });
+
+test('/detach prints the running turn and then its reply', async () => {
+  const session = new FakeSession(async () => done(''));
+  const { code, out } = await runLines(session, ['/detach build it']);
+  expect(code).toBe(0);
+  expect(out).toContain('detached turn snap1 running, waiting for it');
+  expect(out).toContain('agent> background done');
+  expect(out).toContain('Detached turn completed.');
+  expect(session.detaches).toEqual(['build it']);
+});
+
+test('retry after a 409 on /detach reloads and detaches again', async () => {
+  const session = new FakeSession(async () => done(''));
+  session.detachError = new Error('Server returned: 409: {}');
+  const { out, err } = await runLines(session, ['/detach job', 'retry']);
+  expect(err).toContain('Type retry');
+  expect(session.reloads).toBe(1);
+  expect(session.detaches).toEqual(['job', 'job']);
+  expect(out).toContain('Detached turn completed.');
+});
+
+test('resuming a session with a running detached turn waits for its result', async () => {
+  const session = new FakeSession(
+    async () => done(''),
+    async () => ({ history: [], pending: [], running: 'snap9' }),
+  );
+  const { out } = await runLines(session, [], 'old');
+  expect(out).toContain('detached turn snap9 still running, waiting for it');
+  expect(out).toContain('agent> background done');
+  expect(session.waits).toEqual(['snap9']);
+});
+
+test('resuming a session whose detached worker stopped says how to continue', async () => {
+  const session = new FakeSession(
+    async () => done(''),
+    async () => ({ history: [], pending: [], expired: 'snap9' }),
+  );
+  const { out } = await runLines(session, [], 'old');
+  expect(out).toContain('Send a message to continue');
+});

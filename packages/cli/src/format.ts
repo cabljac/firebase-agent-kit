@@ -1,6 +1,7 @@
 /** What a line typed in the chat means. */
 export type Command =
   | { name: 'message'; text: string }
+  | { name: 'detach'; text: string }
   | { name: 'new' }
   | { name: 'resume'; sessionId: string }
   | { name: 'session' }
@@ -11,6 +12,10 @@ export type Command =
 /** Slash commands with their help text, in display order. */
 export const COMMANDS: readonly { usage: string; help: string }[] = [
   { usage: '/new', help: 'Start a new session' },
+  {
+    usage: '/detach <message>',
+    help: 'Run a turn in the background and wait for it',
+  },
   { usage: '/resume <id>', help: 'Switch to an existing session' },
   { usage: '/session', help: 'Show the current session id' },
   { usage: '/help', help: 'Show commands and keys' },
@@ -41,6 +46,10 @@ export function parseCommand(line: string): Command {
       return arg
         ? { name: 'resume', sessionId: arg }
         : { name: 'invalid', message: 'Usage: /resume <session id>' };
+    case 'detach':
+      return arg
+        ? { name: 'detach', text: arg }
+        : { name: 'invalid', message: 'Usage: /detach <message>' };
     default:
       return { name: 'message', text: trimmed };
   }
@@ -138,6 +147,31 @@ export function helpLines(): string[] {
   const width = Math.max(...COMMANDS.map((c) => c.usage.length));
   return [
     ...COMMANDS.map((c) => `${c.usage.padEnd(width)}  ${c.help}`),
-    `${'Ctrl+C'.padEnd(width)}  Stop a running reply`,
+    `${'Ctrl+C'.padEnd(width)}  Stop a running reply, or stop waiting for a detached turn`,
   ];
+}
+
+/**
+ * Describes how a detached turn ended, for the scrollback.
+ * @param outcome The settled detached turn.
+ */
+export function describeDetached(outcome: {
+  snapshotId: string;
+  status: 'completed' | 'failed' | 'aborted' | 'expired';
+  detail?: string;
+}): { tone: 'success' | 'warning'; text: string } {
+  const detail = outcome.detail ? ` ${outcome.detail}` : '';
+  switch (outcome.status) {
+    case 'completed':
+      return { tone: 'success', text: 'Detached turn completed.' };
+    case 'aborted':
+      return { tone: 'warning', text: `Detached turn aborted.${detail}` };
+    case 'failed':
+      return { tone: 'warning', text: `Detached turn failed.${detail}` };
+    case 'expired':
+      return {
+        tone: 'warning',
+        text: 'The worker of the detached turn stopped. Send a message to continue from the turn before it.',
+      };
+  }
 }

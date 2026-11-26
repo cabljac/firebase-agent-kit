@@ -1,10 +1,16 @@
 import { createInterface } from 'node:readline';
 import type { Readable, Writable } from 'node:stream';
-import type { ChatSession, PendingInterrupt, TurnInput } from './chat.js';
+import type {
+  ChatSession,
+  DetachedOutcome,
+  PendingInterrupt,
+  TurnInput,
+} from './chat.js';
 import { explain, type Problem } from './errors.js';
 import {
   approvalOutput,
   describeAnswer,
+  describeDetached,
   formatJson,
   helpLines,
   parseCommand,
@@ -60,7 +66,7 @@ export async function runPlain(opts: PlainOptions): Promise<number> {
   const queue = lines[Symbol.asyncIterator]();
   let pending: PendingInterrupt[] = [];
   let answers: { interrupt: PendingInterrupt; output: unknown }[] = [];
-  let retry: TurnInput | undefined;
+  let retry: TurnInput | { detach: string } | undefined;
   let shownSession: string | undefined;
 
   const askNext = () => {
@@ -106,9 +112,47 @@ export async function runPlain(opts: PlainOptions): Promise<number> {
     }
   };
 
+  const settle = async (
+    wait: () => Promise<DetachedOutcome>,
+    input?: { detach: string },
+  ) => {
+    retry = undefined;
+    try {
+      const outcome = await wait();
+      if (outcome.text) write(`${opts.agentName}> ${outcome.text}`);
+      write(describeDetached(outcome).text);
+    } catch (err) {
+      if (report(err).kind === 'busy' && input) {
+        retry = input;
+        opts.errors.write(
+          '  Type retry to reload the session and send again.\n',
+        );
+      }
+    }
+    if (core.sessionId && core.sessionId !== shownSession) {
+      shownSession = core.sessionId;
+      write(`session: ${core.sessionId}`);
+    }
+  };
+
+  const detach = (message: string) =>
+    settle(
+      () =>
+        core.detach(message, {
+          onDetached: (snapshotId) =>
+            write(`detached turn ${snapshotId} running, waiting for it`),
+        }),
+      { detach: message },
+    );
+
   const load = async (sessionId: string) => {
     try {
-      const { history, pending: open } = await core.loadSession(sessionId);
+      const {
+        history,
+        pending: open,
+        running,
+        expired,
+      } = await core.loadSession(sessionId);
       shownSession = core.sessionId;
       write(`resumed session ${sessionId}`);
       for (const entry of history) {
@@ -116,6 +160,16 @@ export async function runPlain(opts: PlainOptions): Promise<number> {
           entry.role === 'user'
             ? `you> ${entry.text}`
             : `${opts.agentName}> ${entry.text}`,
+        );
+      }
+      if (running) {
+        write(`detached turn ${running} still running, waiting for it`);
+        await settle(() => core.waitDetached(running));
+        return;
+      }
+      if (expired) {
+        write(
+          describeDetached({ snapshotId: expired, status: 'expired' }).text,
         );
       }
       pending = open;
@@ -156,7 +210,8 @@ export async function runPlain(opts: PlainOptions): Promise<number> {
       const input = retry;
       try {
         await core.reload();
-        await run(input);
+        if ('detach' in input) await detach(input.detach);
+        else await run(input);
       } catch (err) {
         report(err);
       }
@@ -166,6 +221,9 @@ export async function runPlain(opts: PlainOptions): Promise<number> {
     switch (command.name) {
       case 'message':
         await run({ message: command.text });
+        break;
+      case 'detach':
+        await detach(command.text);
         break;
       case 'new':
         core.newSession();

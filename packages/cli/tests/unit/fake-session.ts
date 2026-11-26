@@ -1,5 +1,7 @@
 import type {
   ChatSession,
+  DetachedOutcome,
+  DetachHandlers,
   LoadedSession,
   TurnHandlers,
   TurnInput,
@@ -36,6 +38,34 @@ export class FakeSession implements ChatSession {
   }
   async reload() {
     this.reloads++;
+  }
+  detaches: string[] = [];
+  waits: string[] = [];
+  /** What `detach` and `waitDetached` do; settles at once by default. */
+  detachScript: (
+    snapshotId: string,
+    signal?: AbortSignal,
+  ) => Promise<DetachedOutcome> = async (snapshotId) => ({
+    snapshotId,
+    status: 'completed',
+    text: 'background done',
+  });
+  /** Rejects `detach` with this error before it starts, when set. */
+  detachError: unknown;
+  async detach(message: string, handlers: DetachHandlers = {}) {
+    this.detaches.push(message);
+    if (this.detachError) {
+      const err = this.detachError;
+      this.detachError = undefined;
+      throw err;
+    }
+    this.sessionId = 's1';
+    handlers.onDetached?.('snap1');
+    return this.detachScript('snap1', handlers.signal);
+  }
+  waitDetached(snapshotId: string, signal?: AbortSignal) {
+    this.waits.push(snapshotId);
+    return this.detachScript(snapshotId, signal);
   }
   runTurn(input: TurnInput, handlers: TurnHandlers = {}) {
     this.turns.push(input);

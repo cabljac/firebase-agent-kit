@@ -2,12 +2,18 @@ import { Box, Static, Text, useApp, useInput, useStdout } from 'ink';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type {
   ChatSession,
+  DetachedOutcome,
   HistoryEntry,
   PendingInterrupt,
   TurnInput,
 } from '../chat.js';
 import { explain, type Problem } from '../errors.js';
-import { describeAnswer, parseCommand, tailPreview } from '../format.js';
+import {
+  describeAnswer,
+  describeDetached,
+  parseCommand,
+  tailPreview,
+} from '../format.js';
 import {
   ErrorPanel,
   Header,
@@ -48,7 +54,10 @@ type Mode =
       pending: PendingInterrupt[];
       answers: { interrupt: PendingInterrupt; output: unknown }[];
     }
-  | { name: 'busy'; retry: TurnInput };
+  | { name: 'busy'; retry: RetryInput };
+
+/** What a reload-and-retry after a 409 sends again. */
+type RetryInput = TurnInput | { detach: string };
 
 /** Props for {@link App}. */
 export interface AppProps {
@@ -106,7 +115,7 @@ export function App({
   }, []);
 
   const fail = useCallback(
-    (err: unknown, retry?: TurnInput) => {
+    (err: unknown, retry?: RetryInput) => {
       const problem = explainError(err);
       push({ kind: 'problem', problem });
       setMode(
@@ -192,6 +201,65 @@ export function App({
     [core, push, fail, setMode],
   );
 
+  const settleDetached = useCallback(
+    async (
+      wait: (signal: AbortSignal) => Promise<DetachedOutcome>,
+      retry?: RetryInput,
+    ) => {
+      const controller = new AbortController();
+      turnAbort.current = controller;
+      try {
+        const outcome = await wait(controller.signal);
+        setSessionId(core.sessionId);
+        if (outcome.text) {
+          push({ kind: 'agent', text: outcome.text, tools: [] });
+        }
+        push({ kind: 'notice', ...describeDetached(outcome) });
+        setMode({ name: 'input' });
+      } catch (err) {
+        setSessionId(core.sessionId);
+        if (controller.signal.aborted) {
+          const id = core.sessionId;
+          push({
+            kind: 'notice',
+            tone: 'warning',
+            text: id
+              ? `Stopped waiting. The detached turn keeps running. Type /resume ${id} to wait for it again.`
+              : 'Stopped waiting. The detached turn keeps running.',
+          });
+          setMode({ name: 'input' });
+        } else {
+          fail(err, retry);
+        }
+      } finally {
+        turnAbort.current = undefined;
+      }
+    },
+    [core, push, fail, setMode],
+  );
+
+  const runDetached = useCallback(
+    (message: string) => {
+      setMode({ name: 'working', label: 'Sending detached turn' });
+      return settleDetached(
+        (signal) =>
+          core.detach(message, {
+            signal,
+            onDetached: (snapshotId) => {
+              push({
+                kind: 'notice',
+                tone: 'info',
+                text: `Detached turn ${snapshotId} is running on the server. Ctrl+C stops waiting; the turn keeps running.`,
+              });
+              setMode({ name: 'working', label: 'Detached turn running' });
+            },
+          }),
+        { detach: message },
+      );
+    },
+    [core, push, setMode, settleDetached],
+  );
+
   const load = useCallback(
     async (id: string) => {
       const controller = new AbortController();
@@ -200,7 +268,7 @@ export function App({
       const loading = core.loadSession(id, controller.signal);
       loading.catch(() => {});
       try {
-        const { history, pending } = await Promise.race([
+        const { history, pending, running, expired } = await Promise.race([
           loading,
           rejectOnAbort(controller.signal),
         ]);
@@ -209,6 +277,23 @@ export function App({
           { kind: 'notice', tone: 'success', text: `Resumed session ${id}` },
           ...history.map(historyItem),
         );
+        if (running) {
+          push({
+            kind: 'notice',
+            tone: 'info',
+            text: `Detached turn ${running} is still running. Waiting for it; Ctrl+C stops waiting.`,
+          });
+          setMode({ name: 'working', label: 'Detached turn running' });
+          loadAbort.current = undefined;
+          await settleDetached((signal) => core.waitDetached(running, signal));
+          return;
+        }
+        if (expired) {
+          push({
+            kind: 'notice',
+            ...describeDetached({ snapshotId: expired, status: 'expired' }),
+          });
+        }
         setMode(
           pending.length
             ? { name: 'interrupt', pending, answers: [] }
@@ -229,7 +314,7 @@ export function App({
         loadAbort.current = undefined;
       }
     },
-    [core, push, fail, setMode],
+    [core, push, fail, setMode, settleDetached],
   );
 
   const started = useRef(false);
@@ -250,6 +335,10 @@ export function App({
       return;
     }
     switch (command.name) {
+      case 'detach':
+        push({ kind: 'user', text: command.text });
+        void runDetached(command.text);
+        return;
       case 'new':
         core.newSession();
         setSessionId(undefined);
@@ -323,11 +412,13 @@ export function App({
       const retry = current.retry;
       setMode({ name: 'working', label: 'Reloading session' });
       void core.reload().then(
-        () => run(retry),
+        () => ('detach' in retry ? runDetached(retry.detach) : run(retry)),
         (err) => fail(err),
       );
     } else if (key.escape) {
       if ('message' in current.retry) setDraft(current.retry.message);
+      if ('detach' in current.retry)
+        setDraft(`/detach ${current.retry.detach}`);
       setMode({ name: 'input' });
     }
   });

@@ -61,18 +61,20 @@ The first run asks for the password. The client signs in with the Identity Toolk
 
 ## In the chat
 
-| Input          | What it does                                       |
-| -------------- | -------------------------------------------------- |
-| `/new`         | Start a new session.                               |
-| `/resume <id>` | Switch to an existing session.                     |
-| `/session`     | Show the current session id.                       |
-| `/help`        | Show the commands.                                 |
-| `/quit`        | Exit. `/exit` and Ctrl+C at the prompt also exit.  |
-| `//text`       | Send a message that starts with `/`.               |
-| Ctrl+C         | During a reply: stop the stream on this side only. |
+| Input               | What it does                                                                                                                |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `/new`              | Start a new session.                                                                                                        |
+| `/detach <message>` | Send a detached turn and wait for its result.                                                                               |
+| `/resume <id>`      | Switch to an existing session.                                                                                              |
+| `/session`          | Show the current session id.                                                                                                |
+| `/help`             | Show the commands.                                                                                                          |
+| `/quit`             | Exit. `/exit` and Ctrl+C at the prompt also exit.                                                                           |
+| `//text`            | Send a message that starts with `/`.                                                                                        |
+| Ctrl+C              | During a reply: stop the stream on this side only. While waiting for a detached turn: stop waiting; the turn keeps running. |
 
 - **Interrupts.** A turn that stops on an interrupt shows an approval card with the tool name and its input. `a` sends `{"approved": true}`, `d` sends `{"approved": false}`, and `e` lets you type any JSON response. The client cannot see the output schema of the interrupt, so pick `e` when the tool expects something else. Esc leaves the card; `/resume <id>` shows it again.
-- **409.** When another turn holds the session, the client says so. Press `r` to reload the session and send again, or Esc to get the message back in the prompt.
+- **409.** When another turn holds the session, the client says so. Press `r` to reload the session and send again (also for `/detach`), or Esc to get the message back in the prompt.
+- **Detached turns.** `/detach <message>` needs an agent with detached turns on (the kit's `DETACHED_TURNS` param). The client shows the snapshot id of the running turn, waits for it, then shows the reply and how the turn ended. `/resume <id>` (or `--resume`) on a session with a running detached turn shows the history before it and waits for its result. When the worker of the turn stopped, the client says so; the next message continues from the turn before it.
 - **Colours.** Set `NO_COLOR` to turn colours off; bold, dim and the cursor stay. When stdin or stdout is not a terminal, the client reads one message per line, prints plain text, and writes problems to stderr. An interrupt then reads `approve`, `deny` or a JSON value from the next line. The exit code is 1 when a turn failed.
 
 ## Editing keys

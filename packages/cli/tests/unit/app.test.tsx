@@ -186,3 +186,71 @@ test('streamed paragraphs keep their blank line', async () => {
   await frames.until(() => expect(app.text()).toContain('second'));
   expect(app.text()).toMatch(/first\s*\n.*┃\s*\n.*second/);
 });
+
+test('/detach shows the running turn, then its reply', async () => {
+  let finish: () => void = () => {};
+  const session = new FakeSession(async () => done(''));
+  session.detachScript = (snapshotId) =>
+    new Promise((resolve) => {
+      finish = () =>
+        resolve({ snapshotId, status: 'completed', text: 'report ready' });
+    });
+  const app = start(session);
+  await type(app, '/detach write a report', '\r');
+  await frames.until(() =>
+    expect(app.text()).toContain('Detached turn snap1 is running'),
+  );
+  finish();
+  await frames.until(() => expect(app.text()).toContain('report ready'));
+  expect(app.text()).toContain('Detached turn completed.');
+  expect(session.detaches).toEqual(['write a report']);
+  expect(session.turns).toEqual([]);
+});
+
+test('Ctrl+C stops waiting for a detached turn and says how to reattach', async () => {
+  const session = new FakeSession(async () => done(''));
+  session.detachScript = (_id, signal) =>
+    new Promise((_, reject) =>
+      signal?.addEventListener('abort', () => reject(signal.reason)),
+    );
+  const app = start(session);
+  await type(app, '/detach long job', '\r');
+  await frames.until(() =>
+    expect(app.text()).toContain('Detached turn running'),
+  );
+  await type(app, '\x03');
+  await frames.until(() => expect(app.text()).toContain('Stopped waiting'));
+  expect(app.text()).toContain('/resume s1');
+});
+
+test('after a 409 on /detach, r reloads the session and detaches again', async () => {
+  const session = new FakeSession(async () => done(''));
+  session.detachError = new Error('Server returned: 409: {"status":"ABORTED"}');
+  const app = start(session);
+  await type(app, '/detach job', '\r');
+  await frames.until(() => expect(app.text()).toContain('Session busy'));
+  await type(app, 'r');
+  await frames.until(() =>
+    expect(app.text()).toContain('Detached turn completed.'),
+  );
+  expect(session.reloads).toBe(1);
+  expect(session.detaches).toEqual(['job', 'job']);
+});
+
+test('resuming a session with a running detached turn waits for it', async () => {
+  const session = new FakeSession(
+    async () => done(''),
+    async () => ({
+      history: [{ role: 'user', text: 'earlier' }],
+      pending: [],
+      running: 'snap9',
+    }),
+  );
+  const app = start(session, { resume: 'old' });
+  await frames.until(() =>
+    expect(app.text()).toContain('Detached turn completed.'),
+  );
+  expect(app.text()).toContain('Detached turn snap9 is still running');
+  expect(app.text()).toContain('background done');
+  expect(session.waits).toEqual(['snap9']);
+});

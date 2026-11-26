@@ -6,6 +6,7 @@ import {
 } from '../../src/chat.js';
 import {
   describeAnswer,
+  describeDetached,
   describeUrl,
   formatJson,
   helpLines,
@@ -94,9 +95,42 @@ test('describeAnswer names approvals and denials', () => {
 
 test('helpLines aligns the commands', () => {
   const lines = helpLines();
-  expect(lines[0]).toBe('/new          Start a new session');
-  expect(lines).toContain('/quit, /exit  Exit (or press Ctrl+C at the prompt)');
-  expect(lines.at(-1)).toBe('Ctrl+C        Stop a running reply');
+  expect(lines[0]).toBe('/new               Start a new session');
+  expect(lines).toContain(
+    '/detach <message>  Run a turn in the background and wait for it',
+  );
+  expect(lines).toContain(
+    '/quit, /exit       Exit (or press Ctrl+C at the prompt)',
+  );
+  expect(lines.at(-1)).toBe(
+    'Ctrl+C             Stop a running reply, or stop waiting for a detached turn',
+  );
+});
+
+test('parseCommand reads /detach with its message', () => {
+  expect(parseCommand('/detach write a report')).toEqual({
+    name: 'detach',
+    text: 'write a report',
+  });
+  expect(parseCommand('/detach')).toEqual({
+    name: 'invalid',
+    message: 'Usage: /detach <message>',
+  });
+});
+
+test('describeDetached explains each outcome', () => {
+  const at = (status: 'completed' | 'failed' | 'aborted' | 'expired') =>
+    describeDetached({ snapshotId: 'x', status, detail: 'why' });
+  expect(at('completed')).toEqual({
+    tone: 'success',
+    text: 'Detached turn completed.',
+  });
+  expect(at('aborted')).toEqual({
+    tone: 'warning',
+    text: 'Detached turn aborted. why',
+  });
+  expect(at('failed').text).toBe('Detached turn failed. why');
+  expect(at('expired').text).toMatch(/stopped. Send a message/);
 });
 
 const interruptPart = (name: string, ref: string, input: unknown) => ({

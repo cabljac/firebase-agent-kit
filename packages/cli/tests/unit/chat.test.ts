@@ -1,7 +1,9 @@
 import {
+  type AgentInput,
   type AgentStreamChunk,
   type AgentTransport,
   createAgentAPI,
+  type SessionSnapshot,
 } from 'genkit/beta/client';
 import { expect, test } from 'vitest';
 import { StaticTokenSource } from '../../src/auth.js';
@@ -99,4 +101,115 @@ test('counts tool calls from model chunks only, and leaves out interrupts', asyn
     tools: ['lookup'],
     interrupts: [{ name: 'approve', input: {} }],
   });
+});
+
+/** A server holding `snapshots`, whose detached turns land as `settled`. */
+function detachServer(
+  snapshots: Record<string, SessionSnapshot>,
+  settled?: SessionSnapshot,
+) {
+  const inputs: AgentInput[] = [];
+  const inits: unknown[] = [];
+  const t: AgentTransport = {
+    runTurn: (input, init) => {
+      inputs.push(input);
+      inits.push(init);
+      return {
+        stream: (async function* () {})(),
+        output: Promise.resolve(
+          input.detach
+            ? { sessionId: 's1', snapshotId: 'd1', finishReason: 'detached' }
+            : { sessionId: 's1', snapshotId: 'n1', finishReason: 'stop' },
+        ),
+      };
+    },
+    getSnapshot: async (lookup) =>
+      'sessionId' in lookup ? snapshots.tip : snapshots[lookup.snapshotId],
+    waitForSnapshot: async (snapshotId) => settled ?? snapshots[snapshotId],
+    abort: async () => undefined,
+  };
+  return { t, inputs, inits };
+}
+
+const snap = (over: Partial<SessionSnapshot>): SessionSnapshot => ({
+  snapshotId: 'x',
+  sessionId: 's1',
+  createdAt: '2026-11-26T00:00:00Z',
+  ...over,
+});
+
+const said = (user: string, model: string) => ({
+  sessionId: 's1',
+  messages: [
+    { role: 'user' as const, content: [{ text: user }] },
+    { role: 'model' as const, content: [{ text: model }] },
+  ],
+});
+
+test('detach sends detach: true, reports the snapshot, and returns the settled reply', async () => {
+  const completed = snap({
+    snapshotId: 'd1',
+    status: 'completed',
+    state: said('job', 'job done'),
+  });
+  const { t, inputs, inits } = detachServer({ tip: completed, d1: completed });
+  const chat = core(t);
+  const started: string[] = [];
+  const outcome = await chat.detach('job', {
+    onDetached: (id) => started.push(id),
+  });
+  expect(inputs[0]).toMatchObject({ detach: true });
+  expect(started).toEqual(['d1']);
+  expect(outcome).toEqual({
+    snapshotId: 'd1',
+    status: 'completed',
+    text: 'job done',
+  });
+  expect(chat.sessionId).toBe('s1');
+  await chat.runTurn({ message: 'next' });
+  expect(inits.at(-1)).toEqual({ snapshotId: 'd1' });
+});
+
+test('waitDetached reports an aborted turn with its error', async () => {
+  const aborted = snap({
+    snapshotId: 'd1',
+    status: 'aborted',
+    error: { status: 'ABORTED', message: 'stopped' },
+    state: said('job', 'partial'),
+  });
+  const { t } = detachServer({ tip: aborted, d1: aborted });
+  const outcome = await core(t).waitDetached('d1');
+  expect(outcome).toEqual({
+    snapshotId: 'd1',
+    status: 'aborted',
+    text: '',
+    detail: 'stopped',
+  });
+});
+
+test('loadSession reports a running detached turn and shows the history before it', async () => {
+  const { t } = detachServer({
+    tip: snap({ snapshotId: 'd1', status: 'pending', parentId: 'p1' }),
+    d1: snap({ snapshotId: 'd1', status: 'pending', parentId: 'p1' }),
+    p1: snap({ snapshotId: 'p1', state: said('earlier', 'reply') }),
+  });
+  const loaded = await core(t).loadSession('s1');
+  expect(loaded.running).toBe('d1');
+  expect(loaded.history).toEqual([
+    { role: 'user', text: 'earlier' },
+    { role: 'agent', text: 'reply', tools: [] },
+  ]);
+});
+
+test('loadSession reports a detached turn whose worker stopped', async () => {
+  const dead = snap({ snapshotId: 'd1', status: 'expired', parentId: 'p1' });
+  const { t } = detachServer({
+    tip: dead,
+    d1: dead,
+    p1: snap({ snapshotId: 'p1', state: said('earlier', 'reply') }),
+  });
+  const loaded = await core(t).loadSession('s1');
+  expect(loaded.expired).toBe('d1');
+  expect(loaded.running).toBeUndefined();
+  expect(loaded.history).toHaveLength(2);
 });
