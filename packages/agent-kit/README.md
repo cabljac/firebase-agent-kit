@@ -110,13 +110,13 @@ The kit declares these roles and APIs:
 | `roles/aiplatform.user`     | Call Gemini models on Vertex AI for agent turns.                             |
 | `roles/datastore.user`      | Read and write the sessions, the turn locks and the detached runs.           |
 | `roles/cloudtasks.enqueuer` | Enqueue detached turns for `agentWorker`.                                    |
-| `roles/run.invoker`         | Let Cloud Tasks call `agentWorker`.                                          |
+| `roles/run.invoker`         | Let the ID token on each detached turn task call `agentWorker`.              |
 | `roles/firebaseauth.viewer` | Let `agentWorker` read the user (`getUser`) before it runs a detached turn.  |
 | `aiplatform.googleapis.com` | Vertex AI, for the model calls.                                              |
 | `firestore.googleapis.com`  | Firestore, for the sessions and the per-session turn locks.                  |
 | `cloudtasks.googleapis.com` | Cloud Tasks, for detached turns. Declared even when `DETACHED_TURNS` is off. |
 
-Enqueueing a detached turn creates a task with an OIDC token for the kit's service account, which needs `iam.serviceAccounts.actAs` on that account. The kit does not declare `roles/iam.serviceAccountUser` for it, because a project-level grant lets the account act as every service account in the project. Grant `actAs` on the kit's own service account before you turn on `DETACHED_TURNS`. This is not verified on a real deploy yet.
+Detached turns need no other IAM. In a kit, firebase-admin puts an ID token for the kit's service account in the `Authorization` header of each task, not an OIDC token, so Cloud Tasks does not check `iam.serviceAccounts.actAs`. Do not grant `roles/iam.serviceAccountUser`.
 
 The roles are granted at the project level. Tools run as the same service account, so with `roles/cloudtasks.enqueuer` and `roles/run.invoker` a tool could enqueue tasks or invoke other Cloud Run services in the project. Keep that in mind when you write tools.
 
@@ -284,6 +284,8 @@ firebase deploy --only functions:support
 The filter is the instance id, not the function name: do not use `--only functions:kit-support-agent`. `firebase deploy --only functions` deploys every instance and every other codebase.
 
 The first deploy asks you to confirm the managed service account (see [Required IAM](#required-iam)). A non-interactive first deploy (in CI, with `--non-interactive`, or from an AI agent) needs `--force` to confirm it.
+
+For about 30 seconds after the first deploy, requests can get an HTML 401 page ("The access token could not be verified") from the Google front end, until public access to the function takes effect. Retry after a short wait.
 
 When the `.env.<projectId>` file has no value for a param, an interactive deploy asks for it. A non-interactive deploy fails and does not use the default.
 
@@ -481,6 +483,7 @@ The main entry reads the instance id and defines the params when it loads, so us
 - **No session list.** There is no route that lists sessions. Clients must keep their own session ids.
 - **Sessions belong to one instance.** All instances share the session collections, but each instance keys its sessions by the instance id and the user. When a client sends the snapshot id of another instance, the instance answers as for a snapshot of another user: `NOT_FOUND` on a turn, 500 on `/getSnapshot` and `/waitForSnapshot`. A turn with the session id of another instance starts a new session in this instance. If you rename an instance, its sessions stay under the old instance id, and the renamed instance cannot load them.
 - **No cleanup.** Documents in the session and lock collections stay in Firestore until you delete them. The kit sets no TTL on them; run documents have an `expireAt` field for a TTL policy. A turn deletes its lock document when it ends, but a lock from a turn that did not end cleanly stays.
+- **Abort of another user's turn does nothing.** `/abort` with the snapshot id of another user answers 200 with no `status`, and the turn continues. The client's `abort()` resolves `undefined`.
 - **No multipart tools.** `ai.defineTool` takes no `multipart: true` config.
 - **One model provider.** The kit registers only the Vertex AI plugin. Use `ai.defineModel` for anything else.
 

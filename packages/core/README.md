@@ -235,7 +235,7 @@ A crashed worker leaves its run document as `running` or `detached`, without a f
 ### Required IAM and setup
 
 - Enable the Cloud Tasks API (`cloudtasks.googleapis.com`).
-- The runtime service account of the turn route needs `roles/cloudtasks.enqueuer` to enqueue, and `roles/run.invoker` (or the Cloud Functions invoker role) so the task can call the worker. Enqueueing a task with an OIDC token also needs `iam.serviceAccounts.actAs` on the runtime service account. This last part is not verified on a real deploy yet.
+- The runtime service account of the turn route needs `roles/cloudtasks.enqueuer` to enqueue, and `roles/run.invoker` (or the Cloud Functions invoker role) so the task can call the worker. Inside a Function Kit or an extension, firebase-admin sends each task with an ID token in the `Authorization` header, and no more IAM is needed. Elsewhere it sends an OIDC token, which also needs `iam.serviceAccounts.actAs` on the runtime service account. That case is not verified on a real deploy yet.
 - The worker needs `roles/datastore.user` (run documents, locks, sessions) and `firebaseauth.users.get` (for example `roles/firebaseauth.viewer`) for the `getUser` check.
 - Set a TTL policy on the `expireAt` field of the run collection. A run document is kept 7 days:
 
@@ -292,6 +292,7 @@ A crashed worker leaves its run document as `running` or `detached`, without a f
 - **Detached turns need the `detach` option.** Without it, a request with `detach: true` gets 400 `FAILED_PRECONDITION`. See [Detached turns](#detached-turns-experimental) for their own limits.
 - **Denied reads return 500.** When a user asks for a snapshot that is not theirs, `@genkit-ai/express` returns 500 for the `NOT_FOUND` error. This comes from upstream.
 - **No session list.** Session documents sit under the user key, a sha256 hash, and there is no route that lists them. Clients must keep their own session ids.
+- **Abort of another user's turn does nothing.** `/abort` with the snapshot id of another user answers 200 with no `status`, and the turn continues. The client's `abort()` resolves `undefined`.
 - **Sessions are scoped by user unless you set a scope.** Without `scope`, a client can load a session of one agent into another agent that uses the same collections, for the same user only. Give the store of each agent its own `scope` (see Session scope under What it does) or its own `collection` to keep their sessions apart.
 - **No cleanup.** Documents in the session and lock collections stay in Firestore until you delete them. The library sets no TTL on them; run documents carry an `expireAt` field for a TTL policy. A turn deletes its lock document when it ends, but a lock from a turn that did not end cleanly stays.
 
