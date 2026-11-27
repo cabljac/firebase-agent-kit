@@ -284,6 +284,59 @@ test('loadSession reports a detached turn whose worker stopped', async () => {
   expect(loaded.history).toHaveLength(2);
 });
 
+const endsOnInterrupt = {
+  sessionId: 's1',
+  messages: [
+    { role: 'user' as const, content: [{ text: 'clean up' }] },
+    {
+      role: 'model' as const,
+      content: [
+        {
+          toolRequest: { name: 'deleteFile', ref: 'r1', input: {} },
+          metadata: { interrupt: { kind: 'approval' } },
+        },
+      ],
+    },
+  ],
+};
+
+test.each(['aborted', 'failed'] as const)(
+  'waitDetached reports a %s turn that ended on an interrupt as it is, with no interrupts',
+  async (status) => {
+    const stopped = snap({
+      snapshotId: 'd1',
+      status,
+      finishReason: 'interrupted',
+      error: { status: 'ABORTED', message: 'stopped' },
+      state: endsOnInterrupt,
+    });
+    const { t } = detachServer({ tip: stopped, d1: stopped });
+    const outcome = await core(t).waitDetached('d1');
+    expect(outcome).toEqual({
+      snapshotId: 'd1',
+      status,
+      text: '',
+      detail: 'stopped',
+    });
+  },
+);
+
+test('waitDetached warns when an interrupted turn has no interrupt it can read', async () => {
+  const paused = snap({
+    snapshotId: 'd1',
+    status: 'completed',
+    finishReason: 'interrupted',
+    state: said('clean up', 'asking'),
+  });
+  const { t } = detachServer({ tip: paused, d1: paused });
+  const outcome = await core(t).waitDetached('d1');
+  expect(outcome).toEqual({
+    snapshotId: 'd1',
+    status: 'unreadable-interrupt',
+    text: 'asking',
+  });
+});
+
 test('detach returns the interrupts of a turn that settled on one, and the answer resumes it', async () => {
   const paused = snap({
     snapshotId: 'd1',

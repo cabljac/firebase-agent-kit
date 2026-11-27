@@ -238,16 +238,60 @@ export interface LoadedSession {
   expired?: string;
 }
 
-/** How a detached turn ended. */
-export interface DetachedOutcome {
-  snapshotId: string;
-  status: 'completed' | 'interrupted' | 'failed' | 'aborted' | 'expired';
-  /** The agent's last reply, when the turn completed or was interrupted. */
-  text: string;
-  /** The error message of a failed or aborted turn. */
-  detail?: string;
-  /** The interrupts an interrupted turn waits on; answer them with `runTurn`. */
-  interrupts?: PendingInterrupt[];
+/**
+ * How a detached turn ended. `unreadable-interrupt` is a turn that stopped
+ * on an interrupt whose tool requests the client could not read.
+ */
+export type DetachedOutcome =
+  | {
+      snapshotId: string;
+      status: 'interrupted';
+      /** The agent's last reply. */
+      text: string;
+      /** The interrupts the turn waits on; answer them with `runTurn`. */
+      interrupts: PendingInterrupt[];
+    }
+  | {
+      snapshotId: string;
+      status:
+        | 'completed'
+        | 'unreadable-interrupt'
+        | 'failed'
+        | 'aborted'
+        | 'expired';
+      /** The agent's last reply, when the turn did not fail or stop. */
+      text: string;
+      /** The error message of a failed or aborted turn. */
+      detail?: string;
+    };
+
+/**
+ * Reads how a detached turn ended from its settled snapshot.
+ * @param snapshotId The detached turn's snapshot id.
+ * @param snapshot The settled snapshot.
+ */
+function detachedOutcome(
+  snapshotId: string,
+  snapshot: SessionSnapshot,
+): DetachedOutcome {
+  const detail = snapshot.error?.message;
+  const { status } = snapshot;
+  if (status === 'failed' || status === 'aborted' || status === 'expired') {
+    return { snapshotId, status, text: '', ...(detail && { detail }) };
+  }
+  const messages = snapshot.state?.messages ?? [];
+  const last = messages.at(-1);
+  const text =
+    last?.role === 'model'
+      ? last.content.map((p) => p.text ?? '').join('')
+      : '';
+  if (snapshot.finishReason !== 'interrupted') {
+    return { snapshotId, status: 'completed', text };
+  }
+  const interrupts = pendingInterrupts(messages);
+  return interrupts.length > 0
+    ? { snapshotId, status: 'interrupted', text, interrupts }
+    : { snapshotId, status: 'unreadable-interrupt', text };
 }
 
 /** Callbacks for a detached turn. */
@@ -402,28 +446,8 @@ export class ChatCore implements ChatSession {
       throw new SnapshotReadError(snapshotId, err);
     }
     if (!snapshot) throw new Error(`Snapshot ${snapshotId} not found.`);
-    const messages = snapshot.state?.messages ?? [];
-    const settled =
-      snapshot.status === 'failed' ||
-      snapshot.status === 'aborted' ||
-      snapshot.status === 'expired'
-        ? snapshot.status
-        : undefined;
-    const interrupts = settled ? [] : pendingInterrupts(messages);
-    const status = settled ?? (interrupts.length ? 'interrupted' : 'completed');
-    const last = messages.at(-1);
-    const text =
-      !settled && last?.role === 'model'
-        ? last.content.map((p) => p.text ?? '').join('')
-        : '';
     await this.reload();
-    return {
-      snapshotId,
-      status,
-      text,
-      ...(snapshot.error?.message && { detail: snapshot.error.message }),
-      ...(interrupts.length > 0 && { interrupts }),
-    };
+    return detachedOutcome(snapshotId, snapshot);
   }
 
   /**

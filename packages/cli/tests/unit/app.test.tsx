@@ -11,7 +11,7 @@ import {
   type TurnOutcome,
 } from '../../src/chat.js';
 import { App } from '../../src/ui/App.js';
-import { done, FakeSession, interrupted } from './fake-session.js';
+import { done, FakeSession, interrupted, transfer } from './fake-session.js';
 import { frames } from './helpers.js';
 import { renderTty, type TtyApp } from './tty.js';
 
@@ -263,6 +263,44 @@ test('resuming a session with a running detached turn waits for it', async () =>
   expect(session.waits).toEqual(['snap9']);
 });
 
+test('resuming a session whose running detached turn settles on an interrupt shows the card', async () => {
+  const session = new FakeSession(
+    async () => done('sent'),
+    async () => ({ history: [], pending: [], running: 'snap9' }),
+  );
+  session.detachScript = async (snapshotId) => ({
+    snapshotId,
+    status: 'interrupted',
+    text: 'asking',
+    interrupts: [transfer],
+  });
+  const app = start(session, { resume: 'old' });
+  await frames.until(() => expect(app.text()).toContain('Approval needed'));
+  expect(app.text()).toContain('Detached turn needs your answer.');
+  await app.press('d');
+  await frames.until(() => expect(app.text()).toContain('sent'));
+  expect(session.waits).toEqual(['snap9']);
+  expect(session.turns).toEqual([
+    { answers: [{ interrupt: transfer, output: { approved: false } }] },
+  ]);
+});
+
+test('a detached turn that stopped on an interrupt it cannot read says so', async () => {
+  const session = new FakeSession(async () => done(''));
+  session.detachScript = async (snapshotId) => ({
+    snapshotId,
+    status: 'unreadable-interrupt',
+    text: '',
+  });
+  const app = start(session);
+  await type(app, '/detach job', '\r');
+  await frames.until(() =>
+    expect(app.text()).toContain('interrupt that fak cannot read'),
+  );
+  expect(app.text()).not.toContain('Approval needed');
+  expect(app.text()).not.toContain('Detached turn completed.');
+});
+
 test('a detached turn that settles on an approval shows the card, and a restarts the tool', async () => {
   const paused: SessionSnapshot = {
     snapshotId: 'd1',
@@ -323,7 +361,7 @@ test('a detached turn that settles on an approval shows the card, and a restarts
   await frames.until(() => expect(app.text()).toContain('Approval needed'));
   expect(app.text()).toContain('asking first');
   expect(app.text()).toContain('delete /tmp/x');
-  expect(app.text()).not.toContain('Detached turn completed.');
+  expect(app.text()).toContain('Detached turn needs your answer.');
   await app.press('a');
   await frames.until(() => expect(app.text()).toContain('deleted'));
   expect(inputs).toHaveLength(2);

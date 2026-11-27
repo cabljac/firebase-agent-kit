@@ -1,4 +1,5 @@
 import {
+  type DetachedOutcome,
   isRecord,
   isRestartableApproval,
   type PendingInterrupt,
@@ -193,17 +194,19 @@ export function helpLines(): string[] {
  */
 export function describeDetached(outcome: {
   snapshotId: string;
-  status: 'completed' | 'interrupted' | 'failed' | 'aborted' | 'expired';
+  status: DetachedOutcome['status'];
   detail?: string;
-}): { tone: 'success' | 'warning'; text: string } {
+}): { tone: 'info' | 'success' | 'warning'; text: string } {
   const detail = outcome.detail ? ` ${outcome.detail}` : '';
   switch (outcome.status) {
     case 'completed':
       return { tone: 'success', text: 'Detached turn completed.' };
     case 'interrupted':
+      return { tone: 'info', text: 'Detached turn needs your answer.' };
+    case 'unreadable-interrupt':
       return {
         tone: 'warning',
-        text: 'Detached turn stopped. It waits for your answer.',
+        text: 'Detached turn stopped on an interrupt that fak cannot read, so it cannot show the approval. Type /new to start over.',
       };
     case 'aborted':
       return { tone: 'warning', text: `Detached turn aborted.${detail}` };

@@ -1,7 +1,13 @@
 import { PassThrough, Readable } from 'node:stream';
 import { expect, test } from 'vitest';
 import { runPlain } from '../../src/plain.js';
-import { done, FakeSession, interrupted, type Script } from './fake-session.js';
+import {
+  done,
+  FakeSession,
+  interrupted,
+  type Script,
+  transfer,
+} from './fake-session.js';
 
 async function runLines(
   session: FakeSession,
@@ -91,28 +97,32 @@ test('asks for a restartable approval and takes only a JSON object', async () =>
 
 test('asks for the approval a detached turn settled on and resumes with the answer', async () => {
   const session = new FakeSession(async () => done('ok'));
-  const pending = interrupted.status === 'interrupted' ? interrupted : null;
-  if (!pending) throw new Error('fixture is not interrupted');
   session.detachScript = async (snapshotId) => ({
     snapshotId,
     status: 'interrupted',
     text: 'asking',
-    interrupts: pending.interrupts,
+    interrupts: [transfer],
   });
   const { out } = await runLines(session, ['/detach pay', 'approve']);
   expect(out).toContain('agent> asking');
+  expect(out).toContain('Detached turn needs your answer.');
   expect(out).toContain('approval needed: approveTransfer');
-  expect(out).not.toContain('Detached turn completed.');
   expect(session.turns).toEqual([
-    {
-      answers: [
-        {
-          interrupt: pending.interrupts[0],
-          output: { approved: true },
-        },
-      ],
-    },
+    { answers: [{ interrupt: transfer, output: { approved: true } }] },
   ]);
+});
+
+test('says when a detached turn stopped on an interrupt it cannot read', async () => {
+  const session = new FakeSession(async () => done('ok'));
+  session.detachScript = async (snapshotId) => ({
+    snapshotId,
+    status: 'unreadable-interrupt',
+    text: '',
+  });
+  const { out } = await runLines(session, ['/detach pay', 'approve']);
+  expect(out).toContain('stopped on an interrupt that fak cannot read');
+  expect(out).not.toContain('approval needed');
+  expect(session.turns).toEqual([{ message: 'approve' }]);
 });
 
 test('writes a failed turn to stderr and exits 1', async () => {

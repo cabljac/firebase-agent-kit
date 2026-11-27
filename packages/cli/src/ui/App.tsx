@@ -217,7 +217,7 @@ export function App({
         }
         push({ kind: 'notice', ...describeDetached(outcome) });
         setMode(
-          outcome.interrupts?.length
+          outcome.status === 'interrupted'
             ? { name: 'interrupt', pending: outcome.interrupts, answers: [] }
             : { name: 'input' },
         );
