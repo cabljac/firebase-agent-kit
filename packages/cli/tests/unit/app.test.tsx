@@ -1,5 +1,15 @@
+import {
+  type AgentInput,
+  createAgentAPI,
+  type SessionSnapshot,
+} from 'genkit/beta/client';
 import { afterEach, expect, test } from 'vitest';
-import type { ChatSession, TurnOutcome } from '../../src/chat.js';
+import { StaticTokenSource } from '../../src/auth.js';
+import {
+  ChatCore,
+  type ChatSession,
+  type TurnOutcome,
+} from '../../src/chat.js';
 import { App } from '../../src/ui/App.js';
 import { done, FakeSession, interrupted } from './fake-session.js';
 import { frames } from './helpers.js';
@@ -251,4 +261,82 @@ test('resuming a session with a running detached turn waits for it', async () =>
   expect(app.text()).toContain('Detached turn snap9 is still running');
   expect(app.text()).toContain('background done');
   expect(session.waits).toEqual(['snap9']);
+});
+
+test('a detached turn that settles on an approval shows the card, and a restarts the tool', async () => {
+  const paused: SessionSnapshot = {
+    snapshotId: 'd1',
+    sessionId: 's1',
+    createdAt: '2026-11-26T00:00:00Z',
+    status: 'completed',
+    finishReason: 'interrupted',
+    state: {
+      sessionId: 's1',
+      messages: [
+        { role: 'user', content: [{ text: 'clean up' }] },
+        {
+          role: 'model',
+          content: [
+            { text: 'asking first' },
+            {
+              toolRequest: {
+                name: 'deleteFile',
+                ref: 'r1',
+                input: { path: '/tmp/x' },
+              },
+              metadata: {
+                interrupt: { kind: 'approval', action: 'delete /tmp/x' },
+              },
+            },
+          ],
+        },
+      ],
+    },
+  };
+  const inputs: AgentInput[] = [];
+  const agent = createAgentAPI({
+    runTurn: (input) => {
+      inputs.push(input);
+      return {
+        stream: (async function* () {})(),
+        output: Promise.resolve(
+          input.detach
+            ? { sessionId: 's1', snapshotId: 'd1', finishReason: 'detached' }
+            : {
+                sessionId: 's1',
+                snapshotId: 'n1',
+                finishReason: 'stop',
+                message: { role: 'model', content: [{ text: 'deleted' }] },
+              },
+        ),
+      };
+    },
+    getSnapshot: async () => paused,
+    waitForSnapshot: async () => paused,
+    abort: async () => undefined,
+  });
+  const tokens = new StaticTokenSource(
+    `h.${Buffer.from(JSON.stringify({ user_id: 'u' })).toString('base64url')}.s`,
+  );
+  const app = start(new ChatCore({ url: 'http://x', tokens, agent }));
+  await type(app, '/detach clean up', '\r');
+  await frames.until(() => expect(app.text()).toContain('Approval needed'));
+  expect(app.text()).toContain('asking first');
+  expect(app.text()).toContain('delete /tmp/x');
+  expect(app.text()).not.toContain('Detached turn completed.');
+  await app.press('a');
+  await frames.until(() => expect(app.text()).toContain('deleted'));
+  expect(inputs).toHaveLength(2);
+  expect(inputs[1]?.resume).toEqual({
+    restart: [
+      {
+        toolRequest: {
+          name: 'deleteFile',
+          ref: 'r1',
+          input: { path: '/tmp/x' },
+        },
+        metadata: { resumed: { approved: true } },
+      },
+    ],
+  });
 });

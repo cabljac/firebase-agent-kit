@@ -283,3 +283,52 @@ test('loadSession reports a detached turn whose worker stopped', async () => {
   expect(loaded.running).toBeUndefined();
   expect(loaded.history).toHaveLength(2);
 });
+
+test('detach returns the interrupts of a turn that settled on one, and the answer resumes it', async () => {
+  const paused = snap({
+    snapshotId: 'd1',
+    status: 'completed',
+    finishReason: 'interrupted',
+    state: {
+      sessionId: 's1',
+      messages: [
+        { role: 'user', content: [{ text: 'clean up' }] },
+        {
+          role: 'model',
+          content: [
+            { text: 'asking' },
+            {
+              toolRequest: { name: 'deleteFile', ref: 'r1', input: { p: 1 } },
+              metadata: { interrupt: { kind: 'approval', action: 'del' } },
+            },
+          ],
+        },
+      ],
+    },
+  });
+  const { t, inputs, inits } = detachServer({ tip: paused, d1: paused });
+  const chat = core(t);
+  const outcome = await chat.detach('clean up');
+  const interrupt = {
+    name: 'deleteFile',
+    ref: 'r1',
+    input: { p: 1 },
+    metadata: { kind: 'approval', action: 'del' },
+  };
+  expect(outcome).toEqual({
+    snapshotId: 'd1',
+    status: 'interrupted',
+    text: 'asking',
+    interrupts: [interrupt],
+  });
+  await chat.runTurn({ answers: [{ interrupt, output: { approved: true } }] });
+  expect(inits.at(-1)).toEqual({ snapshotId: 'd1' });
+  expect(inputs.at(-1)?.resume).toEqual({
+    restart: [
+      {
+        toolRequest: { name: 'deleteFile', ref: 'r1', input: { p: 1 } },
+        metadata: { resumed: { approved: true } },
+      },
+    ],
+  });
+});

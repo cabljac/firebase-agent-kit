@@ -241,11 +241,13 @@ export interface LoadedSession {
 /** How a detached turn ended. */
 export interface DetachedOutcome {
   snapshotId: string;
-  status: 'completed' | 'failed' | 'aborted' | 'expired';
-  /** The agent's last reply, when the turn completed. */
+  status: 'completed' | 'interrupted' | 'failed' | 'aborted' | 'expired';
+  /** The agent's last reply, when the turn completed or was interrupted. */
   text: string;
   /** The error message of a failed or aborted turn. */
   detail?: string;
+  /** The interrupts an interrupted turn waits on; answer them with `runTurn`. */
+  interrupts?: PendingInterrupt[];
 }
 
 /** Callbacks for a detached turn. */
@@ -400,15 +402,18 @@ export class ChatCore implements ChatSession {
       throw new SnapshotReadError(snapshotId, err);
     }
     if (!snapshot) throw new Error(`Snapshot ${snapshotId} not found.`);
-    const status =
+    const messages = snapshot.state?.messages ?? [];
+    const settled =
       snapshot.status === 'failed' ||
       snapshot.status === 'aborted' ||
       snapshot.status === 'expired'
         ? snapshot.status
-        : 'completed';
-    const last = snapshot.state?.messages?.at(-1);
+        : undefined;
+    const interrupts = settled ? [] : pendingInterrupts(messages);
+    const status = settled ?? (interrupts.length ? 'interrupted' : 'completed');
+    const last = messages.at(-1);
     const text =
-      status === 'completed' && last?.role === 'model'
+      !settled && last?.role === 'model'
         ? last.content.map((p) => p.text ?? '').join('')
         : '';
     await this.reload();
@@ -417,6 +422,7 @@ export class ChatCore implements ChatSession {
       status,
       text,
       ...(snapshot.error?.message && { detail: snapshot.error.message }),
+      ...(interrupts.length > 0 && { interrupts }),
     };
   }
 

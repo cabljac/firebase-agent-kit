@@ -89,6 +89,32 @@ test('asks for a restartable approval and takes only a JSON object', async () =>
   });
 });
 
+test('asks for the approval a detached turn settled on and resumes with the answer', async () => {
+  const session = new FakeSession(async () => done('ok'));
+  const pending = interrupted.status === 'interrupted' ? interrupted : null;
+  if (!pending) throw new Error('fixture is not interrupted');
+  session.detachScript = async (snapshotId) => ({
+    snapshotId,
+    status: 'interrupted',
+    text: 'asking',
+    interrupts: pending.interrupts,
+  });
+  const { out } = await runLines(session, ['/detach pay', 'approve']);
+  expect(out).toContain('agent> asking');
+  expect(out).toContain('approval needed: approveTransfer');
+  expect(out).not.toContain('Detached turn completed.');
+  expect(session.turns).toEqual([
+    {
+      answers: [
+        {
+          interrupt: pending.interrupts[0],
+          output: { approved: true },
+        },
+      ],
+    },
+  ]);
+});
+
 test('writes a failed turn to stderr and exits 1', async () => {
   const session = new FakeSession(async () => {
     throw new Error('Server returned: 403: {"message":"no"}');

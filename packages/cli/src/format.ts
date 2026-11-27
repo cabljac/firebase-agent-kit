@@ -193,13 +193,18 @@ export function helpLines(): string[] {
  */
 export function describeDetached(outcome: {
   snapshotId: string;
-  status: 'completed' | 'failed' | 'aborted' | 'expired';
+  status: 'completed' | 'interrupted' | 'failed' | 'aborted' | 'expired';
   detail?: string;
 }): { tone: 'success' | 'warning'; text: string } {
   const detail = outcome.detail ? ` ${outcome.detail}` : '';
   switch (outcome.status) {
     case 'completed':
       return { tone: 'success', text: 'Detached turn completed.' };
+    case 'interrupted':
+      return {
+        tone: 'warning',
+        text: 'Detached turn stopped. It waits for your answer.',
+      };
     case 'aborted':
       return { tone: 'warning', text: `Detached turn aborted.${detail}` };
     case 'failed':
