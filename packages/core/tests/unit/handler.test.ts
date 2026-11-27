@@ -3,7 +3,12 @@ import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { logger } from 'firebase-functions';
 import { GenkitError } from 'genkit';
-import { genkit, InMemorySessionStore, type SessionStore } from 'genkit/beta';
+import {
+  type Agent,
+  genkit,
+  InMemorySessionStore,
+  type SessionStore,
+} from 'genkit/beta';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { createAgentApp } from '../../src/handler.js';
 import type {
@@ -108,6 +113,25 @@ async function setup(
       body: JSON.stringify(body),
     });
   return { post, base, server };
+}
+
+async function serve(agent: Agent<unknown>, lock: TurnLock) {
+  const app = createAgentApp(
+    agent,
+    { lock },
+    { contextProvider: () => authContext('u1'), sleep: async () => {} },
+  );
+  const server = await new Promise<Server>((resolve) => {
+    const s = app.listen(0, () => resolve(s));
+  });
+  servers.push(server);
+  const socketClosed = new Promise<void>((resolve) => {
+    server.once('connection', (socket) => {
+      socket.once('close', () => resolve());
+    });
+  });
+  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  return { base, socketClosed };
 }
 
 function authContext(uid: string): AgentRequestContext {
@@ -698,53 +722,275 @@ describe('createAgentApp', () => {
     expect(acquired.map((a) => a.key)).toEqual([U1_S1, U1_S1]);
   });
 
-  test('releases the lease when the client disconnects while acquire is pending', async () => {
-    const released: string[] = [];
-    let markAcquireStarted = () => {};
-    let finishAcquire = () => {};
-    const acquireStarted = new Promise<void>((resolve) => {
-      markAcquireStarted = resolve;
-    });
-    const acquireGate = new Promise<void>((resolve) => {
-      finishAcquire = resolve;
-    });
-    const lock: TurnLock = {
-      acquire: async (key) => {
-        markAcquireStarted();
-        await acquireGate;
-        return {
-          key,
-          owner: 'o',
-          release: async () => {
-            released.push(key);
-          },
-        };
-      },
-      renew: async () => true,
-      release: async () => {},
-    };
-    const { base, server } = await setup({ lock });
-    const socketClosed = new Promise<void>((resolve) => {
-      server.once('connection', (socket) => {
-        socket.once('close', () => resolve());
+  test.each([
+    ['a streaming', { accept: 'text/event-stream' }],
+    ['a non-streaming', {}],
+  ])(
+    'releases the lease and skips %s turn when the client left while acquire was pending',
+    async (_kind, headers) => {
+      const started = vi.fn();
+      const ai = genkit({});
+      const agent = ai.defineCustomAgent(
+        { name: 'neverAgent', store: new InMemorySessionStore() },
+        async (sess) => {
+          await sess.run(async () => {
+            started();
+          });
+          return {};
+        },
+      );
+      const released: string[] = [];
+      let markAcquireStarted = () => {};
+      let finishAcquire = () => {};
+      const acquireStarted = new Promise<void>((resolve) => {
+        markAcquireStarted = resolve;
       });
-    });
+      const acquireGate = new Promise<void>((resolve) => {
+        finishAcquire = resolve;
+      });
+      const lock: TurnLock = {
+        acquire: async (key) => {
+          markAcquireStarted();
+          await acquireGate;
+          return {
+            key,
+            owner: 'o',
+            release: async () => {
+              released.push(key);
+            },
+          };
+        },
+        renew: async () => true,
+        release: async () => {},
+      };
+      const { base, socketClosed } = await serve(agent, lock);
+      const client = new AbortController();
+      const request = fetch(`${base}/`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', ...headers },
+        body: JSON.stringify({ data: turn(), init: { sessionId: 's1' } }),
+        signal: client.signal,
+      });
+      await acquireStarted;
+      client.abort();
+      await expect(request).rejects.toThrow('aborted');
+      await socketClosed;
+      await new Promise((resolve) => setImmediate(resolve));
 
-    const controller = new AbortController();
-    const request = fetch(`${base}/`, {
+      finishAcquire();
+      await vi.waitFor(() => expect(released).toEqual([U1_S1]));
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(started).not.toHaveBeenCalled();
+    },
+  );
+
+  test.each([
+    ['a streaming', { accept: 'text/event-stream' }],
+    ['a non-streaming', {}],
+  ])(
+    'aborts %s turn on a disconnect and holds the lease until the turn ends',
+    async (_kind, headers) => {
+      const { lock, released } = fakeLock();
+      const started = vi.fn();
+      const aborted = vi.fn();
+      let finishTurn = () => {};
+      const turnDone = new Promise<void>((resolve) => {
+        finishTurn = resolve;
+      });
+      const ai = genkit({});
+      const agent = ai.defineCustomAgent(
+        { name: 'slowAgent', store: new InMemorySessionStore() },
+        async (sess, { abortSignal }) => {
+          await sess.run(async () => {
+            started();
+            abortSignal?.addEventListener('abort', aborted);
+            await turnDone;
+          });
+          return {};
+        },
+      );
+      const { base, socketClosed } = await serve(agent, lock);
+      const client = new AbortController();
+      const request = fetch(`${base}/`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', ...headers },
+        body: JSON.stringify({ data: turn(), init: { sessionId: 's1' } }),
+        signal: client.signal,
+      }).then((res) => res.text());
+
+      await vi.waitFor(() => expect(started).toHaveBeenCalled());
+      client.abort();
+      await expect(request).rejects.toThrow('aborted');
+      await socketClosed;
+      await vi.waitFor(() => expect(aborted).toHaveBeenCalled());
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(released).toEqual([]);
+
+      finishTurn();
+      await vi.waitFor(() => expect(released).toEqual([U1_S1]));
+    },
+  );
+
+  test('holds the lease through a streaming turn and releases it after the result frame', async () => {
+    const { lock, released } = fakeLock();
+    let finishTurn = () => {};
+    const turnDone = new Promise<void>((resolve) => {
+      finishTurn = resolve;
+    });
+    const ai = genkit({});
+    const agent = ai.defineCustomAgent(
+      { name: 'chunkAgent', store: new InMemorySessionStore() },
+      async (sess, { sendChunk }) => {
+        await sess.run(async () => {
+          sendChunk({ modelChunk: { content: [{ text: 'part' }] } });
+          await turnDone;
+        });
+        return {};
+      },
+    );
+    const { base } = await serve(agent, lock);
+    const res = await fetch(`${base}/`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: {
+        'content-type': 'application/json',
+        accept: 'text/event-stream',
+      },
       body: JSON.stringify({ data: turn(), init: { sessionId: 's1' } }),
-      signal: controller.signal,
     });
-    await acquireStarted;
-    controller.abort();
-    await expect(request).rejects.toThrow('aborted');
-    await socketClosed;
-    await new Promise((resolve) => setImmediate(resolve));
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toBe('text/plain');
+    const reader = res.body?.getReader();
+    if (!reader) throw new Error('no body');
+    const decoder = new TextDecoder();
+    let text = '';
+    while (!text.includes('\n\n')) {
+      const { value } = await reader.read();
+      text += decoder.decode(value, { stream: true });
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(released).toEqual([]);
 
-    finishAcquire();
+    finishTurn();
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      text += decoder.decode(value, { stream: true });
+    }
+    const frames = text.split('\n\n').filter(Boolean);
+    expect(frames.length).toBeGreaterThanOrEqual(2);
+    expect(JSON.parse(frames[0]?.slice('data: '.length) ?? '')).toMatchObject({
+      message: { modelChunk: { content: [{ text: 'part' }] } },
+    });
+    expect(
+      JSON.parse(frames.at(-1)?.slice('data: '.length) ?? ''),
+    ).toMatchObject({ result: { sessionId: 's1' } });
     await vi.waitFor(() => expect(released).toEqual([U1_S1]));
+  });
+
+  test('releases the lease after a streaming turn fails with an error that escapes the action', async () => {
+    const { lock, released } = fakeLock();
+    const store: SessionStore = {
+      getSnapshot: async () => undefined,
+      saveSnapshot: async () => {
+        throw new Error('store down');
+      },
+    };
+    const ai = genkit({});
+    const agent = ai.defineCustomAgent(
+      { name: 'brokenStoreAgent', store },
+      async (sess) => {
+        await sess.run(async () => {});
+        return {};
+      },
+    );
+    const { base } = await serve(agent, lock);
+    const res = await fetch(`${base}/`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        accept: 'text/event-stream',
+      },
+      body: JSON.stringify({ data: turn(), init: { sessionId: 's1' } }),
+    });
+    expect(res.status).toBe(200);
+    const text = await res.text();
+    expect(text).toMatch(/^error: /m);
+    expect(text).toContain('"status":"INTERNAL"');
+    await vi.waitFor(() => expect(released).toEqual([U1_S1]));
+  });
+
+  test('runs the next turn on the session after a disconnect aborted a turn', async () => {
+    const { lock, released } = fakeLock();
+    const store = new InMemorySessionStore();
+    const turnStarted = vi.fn();
+    let finishTurn = () => {};
+    const turnGate = new Promise<void>((resolve) => {
+      finishTurn = resolve;
+    });
+    const ai = genkit({});
+    const agent = ai.defineCustomAgent(
+      { name: 'abortableAgent', store },
+      async (sess, { abortSignal }) => {
+        await sess.run(async (input) => {
+          const text = input.message?.content[0]?.text ?? '';
+          sess.addMessages([
+            { role: 'model', content: [{ text: `echo ${text}` }] },
+          ]);
+          if (text === 'slow') {
+            turnStarted();
+            await turnGate;
+            abortSignal?.throwIfAborted();
+          }
+        });
+        return {};
+      },
+    );
+    const { base } = await serve(agent, lock);
+    const post = (text: string, signal?: AbortSignal) =>
+      fetch(`${base}/`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          accept: 'text/event-stream',
+        },
+        body: JSON.stringify({ data: turn(text), init: { sessionId: 's1' } }),
+        signal,
+      });
+    const lastResult = (text: string) =>
+      JSON.parse(
+        text.split('\n\n').filter(Boolean).at(-1)?.slice('data: '.length) ?? '',
+      ) as { result: { finishReason?: string } };
+
+    const first = await post('hi');
+    expect(lastResult(await first.text()).result.finishReason).not.toBe(
+      'failed',
+    );
+    await vi.waitFor(() => expect(released).toHaveLength(1));
+
+    const client = new AbortController();
+    const aborted = post('slow', client.signal).then((res) => res.text());
+    await vi.waitFor(() => expect(turnStarted).toHaveBeenCalled());
+    client.abort();
+    await expect(aborted).rejects.toThrow('aborted');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(released).toHaveLength(1);
+    finishTurn();
+    await vi.waitFor(() => expect(released).toHaveLength(2));
+
+    const tip = await store.getSnapshot({ sessionId: 's1' });
+    expect(tip?.status).toBe('completed');
+    expect(JSON.stringify(tip?.state)).not.toContain('slow');
+
+    const next = await post('again');
+    expect(next.status).toBe(200);
+    expect(lastResult(await next.text()).result.finishReason).not.toBe(
+      'failed',
+    );
+    const after = await store.getSnapshot({ sessionId: 's1' });
+    const history = JSON.stringify(after?.state);
+    expect(history).toContain('hi');
+    expect(history).toContain('again');
+    await vi.waitFor(() => expect(released).toHaveLength(3));
   });
 
   test('answers 400 for a malformed JSON body', async () => {

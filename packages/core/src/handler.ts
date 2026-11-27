@@ -187,6 +187,41 @@ async function runAction(
   res.status(200).json({ result: run.result });
 }
 
+// expressHandler listens for a streaming client's disconnect on the request, which has already closed, and does not await a streaming run.
+async function runTurn(
+  action: Parameters<typeof expressHandler>[0],
+  req: express.Request,
+  res: express.Response,
+  context: AgentRequestContext,
+  abortSignal: AbortSignal,
+): Promise<void> {
+  let running: Promise<unknown> | undefined;
+  const run: typeof action.run = (input, options) => {
+    const signals = options?.abortSignal
+      ? [abortSignal, options.abortSignal]
+      : [abortSignal];
+    const result = action.run(input, {
+      ...options,
+      abortSignal: AbortSignal.any(signals),
+    });
+    running = result;
+    return result;
+  };
+  const tracked = new Proxy(action, {
+    get: (target, prop, receiver) =>
+      prop === 'run' ? run : Reflect.get(target, prop, receiver),
+  });
+  await expressHandler(tracked, { contextProvider: () => context })(
+    req,
+    res,
+    () => undefined,
+  );
+  await running?.then(
+    () => undefined,
+    () => undefined,
+  );
+}
+
 function isClientError(err: unknown): boolean {
   if (typeof err !== 'object' || err === null || !('status' in err)) {
     return false;
@@ -263,10 +298,10 @@ export function createAgentApp<S>(
     async (req, res) => {
       let lease: TurnLease | null = null;
       let closed = false;
+      const abort = new AbortController();
       res.on('close', () => {
         closed = true;
-        void lease?.release();
-        lease = null;
+        if (!res.writableFinished) abort.abort();
       });
       try {
         const ctx = await contextProvider(toRequestData(req));
@@ -313,10 +348,7 @@ export function createAgentApp<S>(
               sleep,
             );
             if (!lease) throw busyError();
-            if (closed) {
-              void lease.release();
-              lease = null;
-            }
+            if (closed) return;
             if (detach) await reapDeadTip(detach.store, sessionId, ctx);
           }
         }
@@ -324,13 +356,11 @@ export function createAgentApp<S>(
           await runAction(action, req, res, ctx);
           return;
         }
-        await expressHandler(action, { contextProvider: () => ctx })(
-          req,
-          res,
-          () => undefined,
-        );
+        await runTurn(action, req, res, ctx, abort.signal);
       } catch (err) {
         sendError(res, err);
+      } finally {
+        await lease?.release();
       }
     };
 
