@@ -72,7 +72,7 @@ The first run asks for the password. The client signs in with the Identity Toolk
 | `/help`             | Show the commands.                                                                                                          |
 | `/quit`             | Exit. `/exit` and Ctrl+C at the prompt also exit.                                                                           |
 | `//text`            | Send a message that starts with `/`.                                                                                        |
-| Ctrl+C              | During a reply: stop the stream on this side only. While waiting for a detached turn: stop waiting; the turn keeps running. |
+| Ctrl+C              | During a reply: stop the reply and the turn (not in the Functions emulator). For a detached turn: stop waiting; it runs on. |
 
 - **Interrupts.** A turn that stops on an interrupt shows an approval card with the tool name and its input. `a` sends `{"approved": true}`, `d` sends `{"approved": false}`, and `e` lets you type any JSON response. The client cannot see the output schema of the interrupt, so pick `e` when the tool expects something else. Esc leaves the card; `/resume <id>` shows it again.
 - **409.** When another turn holds the session, the client says so. Press `r` to reload the session and send again (also for `/detach`), or Esc to get the message back in the prompt.

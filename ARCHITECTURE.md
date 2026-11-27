@@ -74,7 +74,7 @@ sequenceDiagram
     end
     R->>A: run the turn through expressHandler
     A-->>C: stream chunks, then the result (200)
-    R->>L: release the lock when the response closes
+    R->>L: release the lock when the turn has settled
 ```
 
 The steps in order:
@@ -86,7 +86,7 @@ The steps in order:
 5. **Session id.** `resolveSessionId` follows Genkit's precedence: a non-empty `snapshotId` wins over `sessionId`. It reads a `snapshotId` through the agent's own store, so it sees only the caller's snapshots. A turn with no ids, or with a snapshot id the caller cannot see, gives no session id.
 6. **Lock.** With a session id, the route takes the turn lock (see [The turn lock](#the-turn-lock)). It tries 5 times, with waits of 100, 200, 400 and 800 ms. A lock that stays busy gives 409 `ABORTED`. A turn with no session id takes no lock: Genkit gives it a new session id. When the agent has a `detach` config, the route then runs the reaper on the session (see [Crash recovery](#crash-recovery-the-reaper)).
 7. **The turn.** `expressHandler` runs the agent with the context from step 1. It streams when the client sends `Accept: text/event-stream` or `?stream=true`. Genkit reports most turn failures in the result, as HTTP 200 with `finishReason: 'failed'`. After the first byte is sent, an error can only end the response. An error that escapes the agent action, such as an `AgentInitError` or a failed snapshot write, gets 500 `INTERNAL`. On a streaming turn it gets an `error:` frame with `INTERNAL` (see [Upstream couplings](#upstream-couplings)).
-8. **Release.** The route releases the lease when the response closes, at the end of the turn or on a client disconnect. On a disconnect, a non-streaming turn is aborted, because `expressHandler` listens for `close` on the response. A streaming turn is not aborted. `expressHandler` listens for `close` on the request, and Node emits that event once `express.json()` has read the body, before the listener is added. So a streaming turn keeps running after a disconnect, without the lock (see [The turn lock](#the-turn-lock)).
+8. **Release.** The route releases the lease when the agent action has settled, not when the response closes. When the client disconnects before the response ends, the route aborts the turn, streaming or not, and keeps the lease until the aborted turn has wound down. A second turn on the session gets 409 `ABORTED` until then. When the client disconnects while the route waits for the lock, the route releases the lease and does not run the turn. `runTurn` in `packages/core/src/handler.ts` gives `expressHandler` the agent with a wrapped `run` that adds the route's abort signal and keeps the run's promise (see [Upstream couplings](#upstream-couplings)).
 
 The snapshot and abort routes do not go through `expressHandler`. `runAction` in `packages/core/src/handler.ts` runs the Genkit action directly, so a 4xx `GenkitError` keeps its status. A 5xx error becomes 500 `INTERNAL` (see [Upstream couplings](#upstream-couplings)).
 
@@ -149,7 +149,7 @@ The HTTP lease covers the longest time Cloud Functions lets the turn run. The ti
 
 **When a holder dies.** Nothing deletes the document. The lease lapses, and the next `acquire` takes it over. An HTTP turn cannot outlive the function timeout, so its lease outlasts the turn by 30 s. A worker lease lapses at most 90 s after the last renewal.
 
-**Fencing.** The lock is advisory. Session writes do not carry the lock owner, so a holder that lost its lease can still write. The worker fences itself: when a renewal finds another owner, it aborts its turn. It can still write until that renewal, at most 30 s later, plus the time the abort takes. The HTTP route has a larger gap. It releases its lease when the client disconnects, but the turn can still run. A non-streaming turn is aborted at once, but Cloud Functions throttles CPU after the response, so its last writes can come late. A streaming turn is not aborted and runs to its end. A new turn on the same session can run in that time. Both turns then write snapshots of the session. The writes stay under the user's own prefix, so no other user's data is at risk.
+**Fencing.** The lock is advisory. Session writes do not carry the lock owner, so a holder that lost its lease can still write. The worker fences itself: when a renewal finds another owner, it aborts its turn. It can still write until that renewal, at most 30 s later, plus the time the abort takes. The HTTP route does not release its lease while its turn can still write. On a client disconnect it aborts the turn and releases the lease only when the agent action has settled, so the lease also covers the time the abort takes. Cloud Functions throttles CPU after the response, so that wind-down can be slow. The lease still lapses at the function timeout plus 30 s, when the turn can no longer run.
 
 ## Detached turns
 
@@ -289,8 +289,9 @@ The Firestore collections appear on first write: `agent-kit-sessions`, `agent-ki
 
 ## Upstream couplings
 
-The code works around two upstream problems and reads some upstream internals. [Upstream workarounds](packages/core/README.md#upstream-workarounds) has the details. In short:
+The code works around three upstream problems and reads some upstream internals. [Upstream workarounds](packages/core/README.md#upstream-workarounds) has the details. In short:
 
 - The snapshot and abort routes run the Genkit actions directly, not through `expressHandler`, so a 4xx `GenkitError` keeps its status.
+- The turn route wraps the `run` of the agent that it gives to `expressHandler`, so that it can abort a streaming turn on a disconnect and knows when the turn has settled.
 - The kit patches `registry.dotprompt.renderMetadata` so that bare names in `use:` reach generate calls.
 - The code reads the internals `__action`, `__endpoint`, some registry keys, and builds `ai` with `Object.create(instance)`.
