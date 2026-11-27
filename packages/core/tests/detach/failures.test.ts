@@ -137,7 +137,10 @@ describe('detached runs that do not start', () => {
     const { uid, idToken } = await signUp();
     const { sessionId } = await sessionOf(idToken);
     await admin().auth.setCustomUserClaims(uid, { stallDetach: true });
-    const res = await postDetach(idToken, 'echo x', { init: { sessionId } });
+    // The turn must outlast the worker's abort; an instant turn settles first.
+    const res = await postDetach(idToken, 'slow 60000', {
+      init: { sessionId },
+    });
     expect(res.status).toBe(503);
     expect(await res.json()).toMatchObject({ status: 'UNAVAILABLE' });
     const settled = await until(
