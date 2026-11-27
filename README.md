@@ -42,7 +42,7 @@ You are the support agent. Use lookupOrder to answer questions about orders.
 Define the tools in the wrapper, `source/src/index.ts`, below the generated `setGlobalOptions` call. `ai` is the kit's Genkit instance. `ai.defineTool` gives the tool the signed-in caller, and a call without one fails with `UNAUTHENTICATED`:
 
 ```ts
-// ...generated code, ending with setGlobalOptions({ region: regionParam });
+// ...generated code, up to and including the setGlobalOptions({ region: regionParam, ... }) call
 
 import { ai, z } from '@cabljac/firebase-agent-kit';
 

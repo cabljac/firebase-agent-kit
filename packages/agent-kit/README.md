@@ -30,6 +30,7 @@ firebase functions:kits:install --package @cabljac/firebase-agent-kit
 ```
 
 - `--package` takes an npm registry name, with an optional version (`@cabljac/firebase-agent-kit@1.2.3`). The CLI rejects paths, git URLs and tarballs. Before the package is on npm, point npm at a registry that has it. The CLI runs `npm install` in `function-kits/firebase-agent-kit/source`, so an `.npmrc` in the project root is not read. Set the registry in your user config (`npm config set registry <url>`, which writes `~/.npmrc`) or in the `NPM_CONFIG_REGISTRY` environment variable.
+- `--directory <dir>` is a different flow. It turns a functions codebase that is already inside the project into a kit, with no wrapper and no npm package. It does not install this package from a local path.
 - The CLI asks you to confirm, because the package is outside the `@firebase-function-kits` scope. It installs the package with `--ignore-scripts`.
 - The CLI asks for the kit name and the instance name. Both default to `firebase-agent-kit`, from the unscoped package name. This README assumes the default kit name. Instance names are up to 40 characters of lowercase letters, digits, `_` and `-`, and cannot start or end with `-`.
 - The CLI asks for a region, because the generated wrapper defines a `FUNCTION_DEFAULT_REGION` param. Then it asks for the [params](#configuration). It writes the answers to `function-kits/firebase-agent-kit/config-<instance>/.env.<projectId>`. `--no-configure` skips these questions. Then write that file yourself, with a value for every param.
@@ -58,6 +59,9 @@ The layout after the install:
 ```
 function-kits/firebase-agent-kit/
   source/
+    package.json            generated: depends on the kit, firebase-functions and firebase-admin
+    tsconfig.json           generated
+    .gitignore              generated
     src/index.ts            your wrapper: re-exports the kit, and you define tools here
     prompts/support.prompt  one prompt per instance, named after the instance id (you create these)
     skills/support/         optional skills of one instance, see Skills
@@ -147,7 +151,7 @@ Without this file, every request gets 400 `FAILED_PRECONDITION` and the function
 The kit exports `ai`, its own Genkit instance. Define tools with `ai.defineTool`. It takes the same arguments as Genkit's `ai.defineTool`, but the tool function gets the signed-in caller in `context.auth`, with `context.auth.uid` typed as `string`. A call without a signed-in caller fails with `UNAUTHENTICATED`, for example from the Genkit Developer UI without an auth context.
 
 ```ts
-// ...generated code, ending with setGlobalOptions({ region: regionParam });
+// ...generated code, up to and including the setGlobalOptions({ region: regionParam, ... }) call
 
 import { ai, z } from '@cabljac/firebase-agent-kit';
 
