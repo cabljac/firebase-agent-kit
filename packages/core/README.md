@@ -1,14 +1,14 @@
 # @cabljac/firebase-agent-kit-core
 
-> **Status:** experimental and pre-release. This is a community project, not an official Firebase or Genkit project, and it is not supported for production use. It is not published to npm yet. APIs, package names and behavior may change without notice. It requires Genkit 1.44 (beta agents API) and Node.js 22.12 or later.
-
 Serve [Genkit](https://genkit.dev) agents from Firebase Cloud Functions, with per-user sessions and one turn at a time per session. This is the library under [`@cabljac/firebase-agent-kit`](https://github.com/cabljac/firebase-agent-kit/tree/main/packages/agent-kit#readme). Use it directly when you want to write the `onRequest` function yourself instead of installing the kit.
+
+> **Status:** experimental community project. It is not an official Firebase or Genkit project, and it is not for production use. The package is not on npm yet. APIs and package names may change. It requires Genkit 1.44 (beta agents API) and Node.js 22.12 or later.
 
 `expressHandler(agent)` from `@genkit-ai/express` can already serve an agent from an `onRequest` function. This library adds what a multi-user deployment needs on top of that route:
 
-- **Firebase Auth on every route.** The turn route and the `/getSnapshot`, `/waitForSnapshot` and `/abort` routes all need a valid ID token. App Check is optional.
+- **Auth on every route.** The turn route and the `/getSnapshot`, `/waitForSnapshot` and `/abort` routes all need a valid ID token. App Check is optional.
 - **A uid-scoped session store.** One user cannot read, resume or abort the session of another user.
-- **A per-session turn lock.** Two concurrent turns on one session get a clean 409 instead of racing on the same history.
+- **One turn at a time.** A per-session turn lock gives the second of two concurrent turns on one session 409 `ABORTED`. The two turns do not race on the same history.
 - **Detached turns through Cloud Tasks (experimental).** A turn with `detach: true` runs in a separate task queue function, so it can outlive the HTTP request. Without the `detach` option, the library rejects such turns.
 
 ## Usage

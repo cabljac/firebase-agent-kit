@@ -1,6 +1,8 @@
 # @cabljac/firebase-agent-kit-cli
 
-> **Status:** experimental and pre-release. This is a community project, not an official Firebase or Genkit project. It is not published to npm yet. The name and the options may change.
+Chat with a deployed, authenticated Genkit agent from the terminal. The Genkit CLI has no client for this.
+
+> **Status:** experimental community project. It is not an official Firebase or Genkit project, and it is not for production use. The package is not on npm yet, so [build it from this repo](#run-it). APIs and package names may change. It requires Node.js 22.12 or later.
 
 `fak` is a terminal chat client for agents served by the [agent kit](https://github.com/cabljac/firebase-agent-kit/tree/main/packages/agent-kit#readme) or by [`onAgentRequest`](https://github.com/cabljac/firebase-agent-kit/tree/main/packages/core#readme). It streams replies, shows tool approvals as cards, resumes sessions and explains errors. It uses the stock `remoteAgent` client, so it also shows how a client handles streaming, interrupts, sessions and errors. The published package is one bundled file with no dependencies.
 
@@ -92,8 +94,6 @@ The prompt and the input fields use readline keys:
 | Delete (forward delete)                | Delete the next character.               |
 
 Terminals send different bytes for some keys. Cmd+Backspace works where the terminal sends Ctrl+U for it: iTerm2, the VS Code terminal and Ghostty do this by default; Terminal.app sends nothing. Option+Backspace and Option+Left/Right need the Option key to act as Meta: turn on "Use Option as Meta key" in Terminal.app, or set the Option key to "Esc+" in iTerm2. Shift+Backspace sends the same byte as Backspace in all four.
-
-Requires Node.js 22.12 or later.
 
 ## Limits
 

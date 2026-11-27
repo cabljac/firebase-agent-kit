@@ -1,5 +1,7 @@
 # Examples
 
+A complete Firebase project that shows the kit after install: two instances, tools, skills, an approval interrupt and model fallback. It loads in the emulators with no Google Cloud project. A turn needs a real project for the model calls.
+
 ## `support-agent`
 
 [`support-agent/`](support-agent) is the Firebase project of a fictional outdoor gear store, Acme Outfitters, after two runs of `firebase functions:kits:install` and a short customisation. It has two kit instances:
@@ -40,7 +42,7 @@ support-agent/
 
 ### 1. Install the kit
 
-Start in a Firebase project directory, with a `firebase.json` from `firebase init`. You need firebase-tools 15.27.0 or later.
+Start in a Firebase project directory, with a `firebase.json` from `firebase init`. You need firebase-tools 15.27.0 or later (checked against 15.36.0).
 
 ```sh
 firebase functions:kits:install --package @cabljac/firebase-agent-kit
@@ -138,8 +140,10 @@ firebase deploy --only functions,firestore:rules
 From the terminal, in `support-agent/`:
 
 ```sh
-npx @cabljac/firebase-agent-kit-cli support --email you@example.com
+fak support --email you@example.com
 ```
+
+Until the package is on npm, [build `fak` from this repo](../packages/cli/README.md#run-it) and alias it.
 
 This step assumes that `.firebaserc` and the `.env.<projectId>` files point at your real project, after a deploy. `fak` reads the project from `.firebaserc` and the region from the params file, signs you in and streams the replies. Ask "I want to return the tent from my last order." The agent lists your orders, loads the `refunds` skill and checks that the order is refundable. Then it calls `approveRefund`, and `fak` shows an approval card with the order id and the amount. Press `a` to approve or `d` to deny. On approval, the agent files the request and confirms it.
 

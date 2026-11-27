@@ -1,25 +1,25 @@
 # @cabljac/firebase-agent-kit
 
-> **Status:** experimental and pre-release. This is a community project, not an official Firebase or Genkit project, and it is not supported for production use. It is not published to npm yet. APIs, package names and behavior may change without notice. It requires Genkit 1.44 (beta agents API), Node.js 22.12 or later and firebase-tools 15.27.0 or later.
-
 A Firebase Function Kit that serves a [Genkit](https://genkit.dev) agent from Cloud Functions. Each kit instance is one agent: its `.prompt` file sets the model, the tools and the system prompt, and you write the tools in your own code. Every instance deploys one HTTPS function, `kit-<instance id>-agent`, that the stock `remoteAgent` client can talk to.
+
+> **Status:** experimental community project. It is not an official Firebase or Genkit project, and it is not for production use. The package is not on npm yet, so the install needs [one extra step](#with-firebase-functionskitsinstall). APIs and package names may change. It requires Genkit 1.44 (beta agents API), Node.js 22.12 or later and firebase-tools 15.27.0 or later (checked against 15.36.0).
 
 Every instance gets:
 
-- **Firebase Auth on every route**, with optional App Check.
+- **Auth on every route**, with optional App Check.
 - **Per-user sessions per instance** in Firestore. One user cannot read, resume or abort the session of another user, and one instance cannot load the session of another instance.
-- **One turn at a time** per session. A second turn on a busy session gets 409.
+- **One turn at a time** per session, with a per-session turn lock. A second turn on a busy session gets 409 `ABORTED`.
 - **Streaming and interrupts** through the stock `remoteAgent` client.
 - **Gemini on Vertex AI** with Application Default Credentials, so no API key.
 - **Skills** per instance, and `retry` and `fallback` for model calls, from the `use:` list of the prompt.
-- **Configuration checks** for the prompt file, its `tools:` and `use:` lists, the skills and the params.
+- **Clear configuration errors** for the prompt file, its `tools:` and `use:` lists, the skills and the params.
 - **Per-instance params** for CORS, timeout, memory, App Check and the Vertex AI location.
 
 The kit is built on [`@cabljac/firebase-agent-kit-core`](https://github.com/cabljac/firebase-agent-kit/tree/main/packages/core#readme).
 
 ## Install
 
-These steps are checked against firebase-tools 15.36.0. The `kits` experiment is on by default in that version. If the CLI says it is off, run `firebase experiments:enable kits`.
+The `kits` experiment is on by default in firebase-tools 15.36.0. If the CLI says it is off, run `firebase experiments:enable kits`.
 
 ### With `firebase functions:kits:install`
 
@@ -415,8 +415,10 @@ Instance ids must be unique across all kit stanzas in the project. Each instance
 **From the terminal.** [`fak`](https://github.com/cabljac/firebase-agent-kit/tree/main/packages/cli#readme) finds the instances from `firebase.json` and `.firebaserc`, signs in with email and password, and streams replies:
 
 ```sh
-npx @cabljac/firebase-agent-kit-cli support --email you@example.com
+fak support --email you@example.com
 ```
+
+Until the package is on npm, [build `fak` from this repo](https://github.com/cabljac/firebase-agent-kit/tree/main/packages/cli#run-it) and alias it.
 
 **From an app.** Use the stock `remoteAgent` client with a Firebase ID token:
 
