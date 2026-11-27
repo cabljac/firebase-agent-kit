@@ -1,11 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import type { Server } from 'node:http';
-import type { AddressInfo } from 'node:net';
 import { genkit } from 'genkit/beta';
 import { afterAll, describe, expect, test } from 'vitest';
 import { defineDetachedTurns } from '../../src/detach.js';
 import { createAgentApp } from '../../src/handler.js';
 import { createUserScopedStore } from '../../src/store.js';
+import { listenOnLoopback } from '../unit/listen.js';
 import {
   admin,
   client,
@@ -49,11 +49,8 @@ async function serveInProcess(uid: string) {
       detach: { enqueue: async () => {} },
     },
   );
-  const server = await new Promise<Server>((resolve) => {
-    const s = app.listen(0, () => resolve(s));
-  });
+  const { server, base: url } = await listenOnLoopback(app);
   servers.push(server);
-  const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   const post = (sessionId: string, signal: AbortSignal) =>
     fetch(url, {
       method: 'POST',

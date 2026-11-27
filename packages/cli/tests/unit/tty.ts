@@ -49,6 +49,12 @@ export interface TtyApp {
   stdin: FakeStdin;
   /** Everything written so far, without escape sequences. */
   text(): string;
+  /**
+   * Writes `chunks` to stdin back to back once Ink has run pending effects,
+   * so the `useInput` handlers of newly shown components receive them.
+   * @param chunks The input to send, in order.
+   */
+  press(...chunks: string[]): Promise<void>;
 }
 
 // biome-ignore lint/suspicious/noControlCharactersInRegex: matches escape sequences
@@ -84,5 +90,9 @@ export function renderTty(
     stdout,
     stdin,
     text: () => stdout.output.replace(ANSI, ''),
+    press: async (...chunks) => {
+      await instance.waitUntilRenderFlush();
+      for (const chunk of chunks) stdin.write(chunk);
+    },
   };
 }
