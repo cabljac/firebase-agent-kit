@@ -118,7 +118,7 @@ The function URL is `https://<region>-<project>.cloudfunctions.net/kit-<instance
 
 ## Chat
 
-From the terminal, with [`fak`](packages/cli/README.md). It finds the instance from `firebase.json` and `.firebaserc`, signs you in, streams replies and shows tool approvals as cards. Until the package is on npm, [build it from this repo](packages/cli/README.md#run-it) and alias it as `fak`. Then run it in the project directory:
+From the terminal, with [`fak`](packages/cli/README.md), this project's terminal chat client (TUI). It finds the instance from `firebase.json` and `.firebaserc`, signs you in, streams replies and shows tool approvals as cards. Until the package is on npm, [build it from this repo](packages/cli/README.md#run-it) and alias it as `fak`. Then run it in the project directory:
 
 ```sh
 fak support --email you@example.com
