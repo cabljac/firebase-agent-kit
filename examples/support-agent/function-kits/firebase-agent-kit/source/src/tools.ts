@@ -3,7 +3,7 @@ import {
   type DocumentSnapshot,
   FieldValue,
   getFirestore,
-  type Timestamp,
+  Timestamp,
 } from 'firebase-admin/firestore';
 
 const REFUND_WINDOW_DAYS = 30;
@@ -29,16 +29,20 @@ function ordersOf(uid: string) {
   return getFirestore().collection('users').doc(uid).collection('orders');
 }
 
+function dateOf(value: unknown): Date | undefined {
+  return value instanceof Timestamp ? value.toDate() : undefined;
+}
+
 function toOrder(snap: DocumentSnapshot): Order {
   const data = snap.data() ?? {};
-  const deliveredAt = (data.deliveredAt as Timestamp | undefined)?.toDate();
+  const deliveredAt = dateOf(data.deliveredAt);
   const refundDeadline = deliveredAt
     ? deliveredAt.getTime() + REFUND_WINDOW_DAYS * 24 * 60 * 60 * 1000
     : 0;
   return Order.parse({
     ...data,
     id: snap.id,
-    placedAt: (data.placedAt as Timestamp).toDate().toISOString(),
+    placedAt: dateOf(data.placedAt)?.toISOString(),
     deliveredAt: deliveredAt?.toISOString(),
     refundable: data.status === 'delivered' && Date.now() < refundDeadline,
   });
