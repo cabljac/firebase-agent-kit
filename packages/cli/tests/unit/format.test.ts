@@ -1,5 +1,6 @@
 import { expect, test } from 'vitest';
 import {
+  type DetachedOutcome,
   historyEntries,
   isRestartableApproval,
   pendingInterrupts,
@@ -124,8 +125,14 @@ test('parseCommand reads /detach with its message', () => {
 });
 
 test('describeDetached explains each outcome', () => {
-  const at = (status: 'completed' | 'failed' | 'aborted' | 'expired') =>
+  const at = (status: DetachedOutcome['status']) =>
     describeDetached({ snapshotId: 'x', status, detail: 'why' });
+  expect(at('interrupted')).toEqual({
+    tone: 'info',
+    text: 'Detached turn needs your answer.',
+  });
+  expect(at('unreadable-interrupt').tone).toBe('warning');
+  expect(at('unreadable-interrupt').text).toMatch(/cannot read/);
   expect(at('completed')).toEqual({
     tone: 'success',
     text: 'Detached turn completed.',

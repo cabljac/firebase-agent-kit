@@ -135,6 +135,11 @@ export async function runPlain(opts: PlainOptions): Promise<number> {
       const outcome = await wait();
       if (outcome.text) write(`${opts.agentName}> ${outcome.text}`);
       write(describeDetached(outcome).text);
+      if (outcome.status === 'interrupted') {
+        pending = outcome.interrupts;
+        answers = [];
+        askNext();
+      }
     } catch (err) {
       if (report(err).kind === 'busy' && input) {
         retry = input;

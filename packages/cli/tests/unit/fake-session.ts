@@ -3,6 +3,7 @@ import type {
   DetachedOutcome,
   DetachHandlers,
   LoadedSession,
+  PendingInterrupt,
   TurnHandlers,
   TurnInput,
   TurnOutcome,
@@ -82,10 +83,17 @@ export const done = (text: string): TurnOutcome => ({
   tools: [],
 });
 
+/** One pending `approveTransfer` interrupt. */
+export const transfer: PendingInterrupt = {
+  name: 'approveTransfer',
+  ref: 'r1',
+  input: { amount: 5 },
+};
+
 /** A turn that stopped on one `approveTransfer` interrupt. */
 export const interrupted: TurnOutcome = {
   status: 'interrupted',
   text: '',
   tools: [],
-  interrupts: [{ name: 'approveTransfer', ref: 'r1', input: { amount: 5 } }],
+  interrupts: [transfer],
 };

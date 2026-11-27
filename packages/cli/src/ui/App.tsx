@@ -216,7 +216,11 @@ export function App({
           push({ kind: 'agent', text: outcome.text, tools: [] });
         }
         push({ kind: 'notice', ...describeDetached(outcome) });
-        setMode({ name: 'input' });
+        setMode(
+          outcome.status === 'interrupted'
+            ? { name: 'interrupt', pending: outcome.interrupts, answers: [] }
+            : { name: 'input' },
+        );
       } catch (err) {
         setSessionId(core.sessionId);
         if (controller.signal.aborted) {

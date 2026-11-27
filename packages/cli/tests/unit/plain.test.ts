@@ -1,7 +1,13 @@
 import { PassThrough, Readable } from 'node:stream';
 import { expect, test } from 'vitest';
 import { runPlain } from '../../src/plain.js';
-import { done, FakeSession, interrupted, type Script } from './fake-session.js';
+import {
+  done,
+  FakeSession,
+  interrupted,
+  type Script,
+  transfer,
+} from './fake-session.js';
 
 async function runLines(
   session: FakeSession,
@@ -87,6 +93,36 @@ test('asks for a restartable approval and takes only a JSON object', async () =>
   expect(session.turns[1]).toEqual({
     answers: [{ interrupt: approval, output: { approved: false } }],
   });
+});
+
+test('asks for the approval a detached turn settled on and resumes with the answer', async () => {
+  const session = new FakeSession(async () => done('ok'));
+  session.detachScript = async (snapshotId) => ({
+    snapshotId,
+    status: 'interrupted',
+    text: 'asking',
+    interrupts: [transfer],
+  });
+  const { out } = await runLines(session, ['/detach pay', 'approve']);
+  expect(out).toContain('agent> asking');
+  expect(out).toContain('Detached turn needs your answer.');
+  expect(out).toContain('approval needed: approveTransfer');
+  expect(session.turns).toEqual([
+    { answers: [{ interrupt: transfer, output: { approved: true } }] },
+  ]);
+});
+
+test('says when a detached turn stopped on an interrupt it cannot read', async () => {
+  const session = new FakeSession(async () => done('ok'));
+  session.detachScript = async (snapshotId) => ({
+    snapshotId,
+    status: 'unreadable-interrupt',
+    text: '',
+  });
+  const { out } = await runLines(session, ['/detach pay', 'approve']);
+  expect(out).toContain('stopped on an interrupt that fak cannot read');
+  expect(out).not.toContain('approval needed');
+  expect(session.turns).toEqual([{ message: 'approve' }]);
 });
 
 test('writes a failed turn to stderr and exits 1', async () => {
