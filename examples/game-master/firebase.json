@@ -25,8 +25,8 @@
       },
       "source": "function-kits/firebase-agent-kit/source",
       "instances": {
-        "support": "function-kits/firebase-agent-kit/config-support",
-        "sales": "function-kits/firebase-agent-kit/config-sales"
+        "fantasy": "function-kits/firebase-agent-kit/config-fantasy",
+        "scifi": "function-kits/firebase-agent-kit/config-scifi"
       },
       "predeploy": [
         "npm --prefix \"$RESOURCE_DIR\" run build"
