@@ -13,9 +13,11 @@ const DIFFICULTY = { min: 5, max: 25 };
 
 const Name = z.string().min(1).max(40);
 
-const Item = Name.describe('One item, for example Rope or Plasma cutter.');
+// Genkit turns a schema used twice in one tool into a $ref, which Gemini rejects.
+const item = () =>
+  Name.describe('One item, for example Rope or Plasma cutter.');
 
-const Range = z.object({ min: z.number(), max: z.number() });
+const range = () => z.object({ min: z.number(), max: z.number() });
 
 const Character = z.object({
   name: z.string(),
@@ -81,7 +83,7 @@ ai.defineTool(
     inputSchema: z.object({
       name: Name,
       role: Name.describe('The class or job, for example Ranger or Pilot.'),
-      startingItems: z.array(Item).max(MAX_INVENTORY),
+      startingItems: z.array(item()).max(MAX_INVENTORY),
     }),
     outputSchema: z.object({
       outcome: z.enum([
@@ -135,8 +137,8 @@ ai.defineTool(
     inputSchema: z.object({
       hpChange: z.number(),
       coinsChange: z.number(),
-      addItems: z.array(Item).max(MAX_INVENTORY),
-      removeItems: z.array(Item).max(MAX_INVENTORY),
+      addItems: z.array(item()).max(MAX_INVENTORY),
+      removeItems: z.array(item()).max(MAX_INVENTORY),
     }),
     outputSchema: z.object({
       outcome: z.enum([
@@ -153,8 +155,8 @@ ai.defineTool(
       missingItem: z.string().optional(),
       allowed: z
         .object({
-          hpChange: Range,
-          coinsChange: Range,
+          hpChange: range(),
+          coinsChange: range(),
           itemsPerUpdate: z.number(),
         })
         .optional(),
@@ -234,7 +236,7 @@ ai.defineTool(
       modifier: z.number().optional(),
       total: z.number().optional(),
       allowed: z
-        .object({ count: Range, sides: Range, modifier: Range })
+        .object({ count: range(), sides: range(), modifier: range() })
         .optional(),
     }),
   },
@@ -282,7 +284,7 @@ ai.defineTool(
       total: z.number().optional(),
       damage: z.number().optional(),
       character: Character.optional(),
-      allowed: z.object({ difficulty: Range, modifier: Range }).optional(),
+      allowed: z.object({ difficulty: range(), modifier: range() }).optional(),
     }),
   },
   async (input, { context, interrupt, resumed }) => {

@@ -66,6 +66,12 @@ export async function runPlain(opts: PlainOptions): Promise<number> {
     for (const line of problemLines(problem)) opts.errors.write(`${line}\n`);
     return problem;
   };
+  const showDetached = (outcome: Parameters<typeof describeDetached>[0]) => {
+    const { tone, text } = describeDetached(outcome);
+    if (tone !== 'warning') return write(text);
+    failed = true;
+    opts.errors.write(`${text}\n`);
+  };
   const lines = createInterface({ input: opts.input, terminal: false });
   // Created before the first await: readline drops lines read before then.
   const queue = lines[Symbol.asyncIterator]();
@@ -134,7 +140,7 @@ export async function runPlain(opts: PlainOptions): Promise<number> {
     try {
       const outcome = await wait();
       if (outcome.text) write(`${opts.agentName}> ${outcome.text}`);
-      write(describeDetached(outcome).text);
+      showDetached(outcome);
       if (outcome.status === 'interrupted') {
         pending = outcome.interrupts;
         answers = [];
@@ -187,9 +193,7 @@ export async function runPlain(opts: PlainOptions): Promise<number> {
         return;
       }
       if (expired) {
-        write(
-          describeDetached({ snapshotId: expired, status: 'expired' }).text,
-        );
+        showDetached({ snapshotId: expired, status: 'expired' });
       }
       pending = open;
       answers = [];

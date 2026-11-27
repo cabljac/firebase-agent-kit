@@ -78,6 +78,7 @@ Turn timeout in seconds: How long one agent turn can run before Cloud Functions 
 ? Enter a string value for Vertex AI location: europe-west1
 ? Select a value for Detached turns (experimental): Enabled
 ? Enter an integer value for Detached turn timeout in seconds: 600
+? Select a value for Google Cloud telemetry: Disabled
 i  functions: Writing new parameter values to disk: function-kits/firebase-agent-kit/config-fantasy/.env.demo-agent-kit
 ✔  functions: Function kit firebase-agent-kit successfully installed.
 i  functions: At the first deploy, the following functions will be created in your project:
@@ -190,7 +191,7 @@ The generated files are copied from the firebase-tools 15.36.0 templates and cod
 | `firebase.json` `functions` block    | `addKitToConfig` and `addInstanceToKitConfig` in `functions/kits/install.js`, written with `JSON.stringify(config, null, 2)`.                                                                                                                                          |
 | `config-<instance>/.env.<projectId>` | `promptAndWriteKitParams` in `functions/kits/install.js` and `writeUserEnvs` in `functions/env.js`: one `KEY=value` line per param, in the order the code defines them.                                                                                                |
 
-CI lints the files that the user wrote. It does not typecheck or build them, because the example is not part of the pnpm workspace.
+CI lints the files that the user wrote. It does not typecheck or build them, because the example is not part of the pnpm workspace. `pnpm test` loads `src/tools.ts` against the workspace kit and checks that no tool schema contains a `$ref`, because Gemini on Vertex AI rejects one.
 
 Inferred, not generated:
 
