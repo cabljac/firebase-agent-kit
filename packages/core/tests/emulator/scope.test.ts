@@ -77,8 +77,11 @@ test("an agent with another scope cannot resume or read the same user's snapshot
   expect(
     await post('beta', '/getSnapshot', { data: { snapshotId } }, user.idToken),
   ).toEqual({
-    status: 500,
-    body: { status: 'INTERNAL', message: 'Internal Error' },
+    status: 404,
+    body: {
+      status: 'NOT_FOUND',
+      message: `Snapshot '${snapshotId}' not found for agent 'betaAgent'.`,
+    },
   });
   await expectAlphaResumes(user.idToken, sessionId);
 });

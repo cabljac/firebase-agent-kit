@@ -140,6 +140,21 @@ export class SessionLoadError extends Error {
   }
 }
 
+/** Waiting for a detached turn failed; `cause` holds the client error. */
+export class SnapshotReadError extends Error {
+  /**
+   * @param snapshotId The snapshot that was being read.
+   * @param cause The client error.
+   */
+  constructor(
+    readonly snapshotId: string,
+    cause: unknown,
+  ) {
+    super(`Could not read snapshot ${snapshotId}.`, { cause });
+    this.name = 'SnapshotReadError';
+  }
+}
+
 /** A loaded session: what was said, and any interrupt still waiting. */
 export interface LoadedSession {
   history: HistoryEntry[];
@@ -303,9 +318,14 @@ export class ChatCore implements ChatSession {
     signal?: AbortSignal,
   ): Promise<DetachedOutcome> {
     this.stale = true;
-    const snapshot = await this.agent.waitForSnapshot(snapshotId, {
-      abortSignal: signal,
-    });
+    let snapshot: SessionSnapshot | undefined;
+    try {
+      snapshot = await this.agent.waitForSnapshot(snapshotId, {
+        abortSignal: signal,
+      });
+    } catch (err) {
+      throw new SnapshotReadError(snapshotId, err);
+    }
     if (!snapshot) throw new Error(`Snapshot ${snapshotId} not found.`);
     const status =
       snapshot.status === 'failed' ||

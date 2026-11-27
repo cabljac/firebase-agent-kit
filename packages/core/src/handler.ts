@@ -5,13 +5,14 @@ import {
   setDebugSkipTokenVerification,
 } from '@genkit-ai/firebase/context';
 import express from 'express';
+import { logger } from 'firebase-functions';
 import { Expression } from 'firebase-functions/params';
 import {
   type HttpsFunction,
   type HttpsOptions,
   onRequest,
 } from 'firebase-functions/v2/https';
-import { GenkitError } from 'genkit';
+import { GenkitError, z } from 'genkit';
 import { type Agent, AgentInitSchema, AgentInputSchema } from 'genkit/beta';
 import type { ContextProvider, RequestData } from 'genkit/context';
 import {
@@ -32,6 +33,7 @@ import { lockKey } from './keys.js';
 import { FirestoreTurnLock } from './lock.js';
 import { reapDeadTip } from './reaper.js';
 import type {
+  AgentRequestContext,
   AgentRequestOptions,
   AgentRoute,
   BeforeTurnRequest,
@@ -100,6 +102,88 @@ function parseTurn(
     });
   }
   return { input: input.data, init: init.data };
+}
+
+const ValidationDetailSchema = z.object({
+  errors: z.array(z.unknown()),
+  schema: z.object({}).passthrough(),
+});
+
+// Genkit does not export ValidationError; its detail carries the parse errors and the schema.
+function validationErrors(err: GenkitError): unknown[] | undefined {
+  if (err.status !== 'INVALID_ARGUMENT') return undefined;
+  const detail = ValidationDetailSchema.safeParse(err.detail);
+  return detail.success ? detail.data.errors : undefined;
+}
+
+const STREAM_DELIMITER = '\n\n';
+
+function wantsStream(req: express.Request): boolean {
+  return (
+    req.get('Accept')?.toLowerCase().includes('text/event-stream') === true ||
+    req.query.stream === 'true'
+  );
+}
+
+function publicError(err: unknown): GenkitError {
+  const errors = err instanceof GenkitError ? validationErrors(err) : undefined;
+  if (errors) {
+    // The message of a validation error holds the whole snapshot.
+    logger.error('Agent action failed', { status: 'INVALID_ARGUMENT', errors });
+  } else if (err instanceof GenkitError && err.code < 500) {
+    return err;
+  } else {
+    logger.error('Agent action failed', err);
+  }
+  return new GenkitError({ status: 'INTERNAL', message: 'Internal Error' });
+}
+
+// expressHandler loads the CJS build of genkit, so it answers 500 for the GenkitErrors of this ESM build.
+async function runAction(
+  action: Parameters<typeof expressHandler>[0],
+  req: express.Request,
+  res: express.Response,
+  context: AgentRequestContext,
+): Promise<void> {
+  const input: unknown = req.body?.data;
+  if (action.__action.inputSchema?.safeParse(input).success === false) {
+    throw new GenkitError({
+      status: 'INVALID_ARGUMENT',
+      message: 'Malformed snapshot request.',
+    });
+  }
+  const abort = new AbortController();
+  res.on('close', () => {
+    if (!res.writableFinished) abort.abort();
+  });
+  const stream = wantsStream(req);
+  if (stream) {
+    res.writeHead(200, {
+      'Content-Type': 'text/plain',
+      'Transfer-Encoding': 'chunked',
+    });
+  }
+  let run: Awaited<ReturnType<typeof action.run>>;
+  try {
+    run = await action.run(input, { context, abortSignal: abort.signal });
+  } catch (err) {
+    if (abort.signal.aborted || res.destroyed) return;
+    const error = publicError(err);
+    if (!stream) throw error;
+    res.end(
+      `error: ${JSON.stringify({ error: error.toJSON() })}${STREAM_DELIMITER}`,
+    );
+    return;
+  }
+  if (stream) {
+    res.end(
+      `data: ${JSON.stringify({ result: run.result })}${STREAM_DELIMITER}`,
+    );
+    return;
+  }
+  res.setHeader('x-genkit-trace-id', run.telemetry.traceId);
+  res.setHeader('x-genkit-span-id', run.telemetry.spanId);
+  res.status(200).json({ result: run.result });
 }
 
 function isClientError(err: unknown): boolean {
@@ -234,6 +318,10 @@ export function createAgentApp<S>(
             }
             if (detach) await reapDeadTip(detach.store, sessionId, ctx);
           }
+        }
+        if (name !== 'turn') {
+          await runAction(action, req, res, ctx);
+          return;
         }
         await expressHandler(action, { contextProvider: () => ctx })(
           req,

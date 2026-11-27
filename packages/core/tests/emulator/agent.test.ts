@@ -1,8 +1,8 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { initializeApp } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
 import { beforeAll, describe, expect, test } from 'vitest';
-import { client, defined, postRaw, signUp } from './helpers.js';
+import { client, defined, FUNCTION_URL, postRaw, signUp } from './helpers.js';
 
 interface Ids {
   sessionId: string;
@@ -249,17 +249,20 @@ describe('cross-user isolation', () => {
     await expectAliceUnchanged(alice, { sessionId, snapshotId }, snapshot);
   });
 
-  const internalError = {
-    status: 500,
-    body: { status: 'INTERNAL', message: 'Internal Error' },
-  };
+  const notFound = (id: string) => ({
+    status: 404,
+    body: {
+      status: 'NOT_FOUND',
+      message: `Snapshot '${id}' not found for agent 'testAgent'.`,
+    },
+  });
 
   test.each([
     ['/getSnapshot', 'snapshotId'],
     ['/getSnapshot', 'sessionId'],
     ['/waitForSnapshot', 'snapshotId'],
   ] as const)(
-    "answers 500 INTERNAL (upstream maps NOT_FOUND to 500) when user B calls %s with user A's %s",
+    "answers 404 NOT_FOUND, as for an unknown id, when user B calls %s with user A's %s",
     async (path, idName) => {
       const { alice, sessionId, snapshotId, snapshot } =
         await startAliceSession();
@@ -271,11 +274,42 @@ describe('cross-user isolation', () => {
         { data: { [idName]: ids[idName] } },
         bob.idToken,
       );
-      expect(res).toEqual(internalError);
+      expect(res).toEqual(notFound(ids[idName]));
+      const unknown = await postRaw(
+        path,
+        { data: { [idName]: 'no-such-id' } },
+        bob.idToken,
+      );
+      expect(unknown).toEqual(notFound('no-such-id'));
 
       await expectAliceUnchanged(alice, ids, snapshot);
     },
   );
+
+  test("sends the same headers for user A's snapshotId and an unknown id on /getSnapshot", async () => {
+    const { snapshotId } = await startAliceSession();
+    const bob = await signUp();
+    const headersFor = async (id: string) => {
+      const res = await fetch(`${FUNCTION_URL}/getSnapshot`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${bob.idToken}`,
+        },
+        body: JSON.stringify({ data: { snapshotId: id } }),
+      });
+      expect(res.status).toBe(404);
+      await res.text();
+      // The date varies per request and the etag hashes the body, which echoes the id.
+      return [...res.headers.entries()].filter(
+        ([name]) => name !== 'date' && name !== 'etag',
+      );
+    };
+
+    const unknownId = randomUUID();
+    expect(unknownId).toHaveLength(snapshotId.length);
+    expect(await headersFor(snapshotId)).toEqual(await headersFor(unknownId));
+  });
 
   test("answers /abort with no status when user B sends user A's snapshotId", async () => {
     const { alice, sessionId, snapshotId, snapshot } =
@@ -284,18 +318,43 @@ describe('cross-user isolation', () => {
 
     const res = await postRaw('/abort', { data: { snapshotId } }, bob.idToken);
     expect(res).toEqual({ status: 200, body: { result: { snapshotId } } });
+    const unknown = await postRaw(
+      '/abort',
+      { data: { snapshotId: 'no-such-id' } },
+      bob.idToken,
+    );
+    expect(unknown).toEqual({
+      status: 200,
+      body: { result: { snapshotId: 'no-such-id' } },
+    });
+    const malformed = await postRaw(
+      '/abort',
+      { data: { snapshotId: 5 } },
+      bob.idToken,
+    );
+    expect(malformed).toEqual({
+      status: 400,
+      body: {
+        status: 'INVALID_ARGUMENT',
+        message: 'Malformed snapshot request.',
+      },
+    });
 
     await expectAliceUnchanged(alice, { sessionId, snapshotId }, snapshot);
   });
 
-  test("rejects user B's client getSnapshot and resume with user A's snapshotId", async () => {
+  test("rejects user B's client getSnapshot, waitForSnapshot and resume with user A's snapshotId", async () => {
     const { alice, sessionId, snapshotId, snapshot } =
       await startAliceSession();
     const bob = await signUp();
+    const notFoundError = `Server returned: 404: ${JSON.stringify(notFound(snapshotId).body)}`;
 
     await expect(client(bob.idToken).getSnapshot(snapshotId)).rejects.toThrow(
-      'Server returned: 500: {"message":"Internal Error","status":"INTERNAL"}',
+      notFoundError,
     );
+    await expect(
+      client(bob.idToken).waitForSnapshot(snapshotId),
+    ).rejects.toThrow(notFoundError);
     await expect(
       client(bob.idToken).chat({ snapshotId }).send('count'),
     ).rejects.toMatchObject({

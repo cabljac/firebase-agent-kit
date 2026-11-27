@@ -1,7 +1,7 @@
 import { AgentError, createAgentAPI } from 'genkit/beta/client';
 import { expect, test } from 'vitest';
 import { AUTH_NETWORK_ERROR, AuthError, UsageError } from '../../src/auth.js';
-import { SessionLoadError } from '../../src/chat.js';
+import { SessionLoadError, SnapshotReadError } from '../../src/chat.js';
 import { explain, parseServerError } from '../../src/errors.js';
 import { problemLines } from '../../src/plain.js';
 import { ConfigFileError } from '../../src/store.js';
@@ -34,6 +34,7 @@ test.each([
   [400, { status: 'FAILED_PRECONDITION', message: 'bad prompt' }, 'config'],
   [400, { status: 'INVALID_ARGUMENT', message: 'x' }, 'unknown'],
   [404, 'Not Found', 'not-found'],
+  [404, { status: 'NOT_FOUND', message: 'x' }, 'unknown'],
   [500, { status: 'INTERNAL', message: 'Internal Error' }, 'unknown'],
 ])('explains HTTP %i as %s', (status, body, kind) => {
   expect(explain(server(status, body)).kind).toBe(kind);
@@ -114,7 +115,47 @@ test('explains a session that cannot be loaded', () => {
     title: 'Could not load session s1',
   });
   expect(
+    explain(
+      new SessionLoadError(
+        's1',
+        server(404, {
+          status: 'NOT_FOUND',
+          message: "Snapshot 's1' not found for agent 'a'.",
+        }),
+      ),
+    ),
+  ).toMatchObject({
+    kind: 'session-not-found',
+    title: 'Could not load session s1',
+    detail: "Snapshot 's1' not found for agent 'a'.",
+  });
+  expect(
     explain(new SessionLoadError('s1', server(401, { message: 'x' }))).kind,
+  ).toBe('unauthenticated');
+});
+
+test("shows the server message for a hook's NOT_FOUND on a turn", () => {
+  expect(
+    explain(server(404, { status: 'NOT_FOUND', message: 'No such project.' })),
+  ).toMatchObject({
+    kind: 'unknown',
+    title: 'The server answered 404',
+    detail: 'No such project.',
+  });
+});
+
+test('explains a NOT_FOUND while waiting for a detached turn as session not found', () => {
+  const notFound = server(404, {
+    status: 'NOT_FOUND',
+    message: "Snapshot 'p1' not found for agent 'a'.",
+  });
+  expect(explain(new SnapshotReadError('p1', notFound))).toMatchObject({
+    kind: 'session-not-found',
+    title: 'Session not found',
+    detail: "Snapshot 'p1' not found for agent 'a'.",
+  });
+  expect(
+    explain(new SnapshotReadError('p1', server(401, { message: 'x' }))).kind,
   ).toBe('unauthenticated');
 });
 
