@@ -59,13 +59,13 @@ The layout after the install:
 ```
 function-kits/firebase-agent-kit/
   source/
-    package.json            generated: depends on the kit, firebase-functions and firebase-admin
-    tsconfig.json           generated
-    .gitignore              generated
-    src/index.ts            your wrapper: re-exports the kit, and you define tools here
-    prompts/support.prompt  one prompt per instance, named after the instance id (you create these)
-    skills/support/         optional skills of one instance, see Skills
-  config-support/.env.<projectId>
+    package.json                  generated: depends on the kit, firebase-functions and firebase-admin
+    tsconfig.json                 generated
+    .gitignore                    generated
+    src/index.ts                  your wrapper: re-exports the kit, and you define tools here
+    prompts/<instance-id>.prompt  one prompt per instance, named after the instance id (you create these)
+    skills/<instance-id>/         optional skills of one instance, see Skills
+  config-<instance-id>/.env.<projectId>
 ```
 
 The install does not create the prompt file. See [Customise](#customise).
@@ -338,7 +338,7 @@ Deploy one instance by its instance id:
 firebase deploy --only functions:support
 ```
 
-The filter is the instance id, not the function name: do not use `--only functions:kit-support-agent`. `firebase deploy --only functions` deploys every instance and every other codebase.
+The filter is the instance id, not the function name: do not use `--only functions:kit-<instance-id>-agent`. `firebase deploy --only functions` deploys every instance and every other codebase.
 
 The first deploy asks you to confirm the managed service account (see [Required IAM](#required-iam)). A non-interactive first deploy (in CI, with `--non-interactive`, or from an AI agent) needs `--force` to confirm it.
 

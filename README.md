@@ -65,7 +65,7 @@ For a full project that shows most features, see the [game master example](examp
 
 ## Customise
 
-Create the prompt of the instance, `function-kits/firebase-agent-kit/source/prompts/support.prompt`:
+Create the prompt of the instance. It is named after the instance id, `function-kits/firebase-agent-kit/source/prompts/<instance-id>.prompt`. For an instance named `support`:
 
 ```
 ---
@@ -110,11 +110,11 @@ Change the params in `function-kits/firebase-agent-kit/config-support/.env.<proj
 firebase deploy --only functions:support
 ```
 
-Filter by the instance id, not the function name `kit-support-agent`.
+Filter by the instance id, not the function name `kit-<instance-id>-agent`.
 
 A non-interactive first deploy needs `--force`. It confirms the service account that the deploy creates. See [Required IAM](packages/agent-kit/README.md#required-iam).
 
-The function URL is `https://<region>-<project>.cloudfunctions.net/kit-support-agent`.
+The function URL is `https://<region>-<project>.cloudfunctions.net/kit-<instance-id>-agent`.
 
 ## Chat
 
