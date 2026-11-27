@@ -161,6 +161,16 @@ test('explains an unknown session id', async () => {
   expect(explain(err).kind).toBe('session-not-found');
 });
 
+test('explains a reattach to an unknown snapshot id as session not found', async () => {
+  const err = await core()
+    .waitDetached('no-such-snapshot')
+    .catch((e: unknown) => e);
+  expect(explain(err)).toMatchObject({
+    kind: 'session-not-found',
+    detail: "Snapshot 'no-such-snapshot' not found for agent 'testAgent'.",
+  });
+});
+
 test('reports 409 while another turn runs, then succeeds after a reload', async () => {
   const owner = core();
   await owner.runTurn({ message: 'echo start' });

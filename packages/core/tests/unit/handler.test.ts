@@ -1,8 +1,9 @@
 import { createHash } from 'node:crypto';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { logger } from 'firebase-functions';
 import { GenkitError } from 'genkit';
-import { genkit, InMemorySessionStore } from 'genkit/beta';
+import { genkit, InMemorySessionStore, type SessionStore } from 'genkit/beta';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { createAgentApp } from '../../src/handler.js';
 import type {
@@ -55,6 +56,7 @@ async function setup(
     withoutRawToken?: boolean;
     authorize?: AgentRequestOptions['authorize'];
     beforeTurn?: AgentRequestOptions['beforeTurn'];
+    store?: SessionStore;
   } = {},
 ) {
   const ai = genkit({});
@@ -70,7 +72,7 @@ async function setup(
   const agent = ai.defineAgent({
     name: 'testAgent',
     model: 'echo',
-    store: new InMemorySessionStore(),
+    store: opts.store ?? new InMemorySessionStore(),
   });
   const uid = opts.uid === undefined ? 'u1' : opts.uid;
   const app = createAgentApp(
@@ -396,16 +398,285 @@ describe('createAgentApp', () => {
     expect(await snap.json()).toMatchObject({
       result: { snapshotId: result.snapshotId },
     });
+    expect(snap.headers.get('x-genkit-trace-id')).toMatch(/^[0-9a-f]{32}$/);
+    expect(snap.headers.get('x-genkit-span-id')).toMatch(/^[0-9a-f]{16}$/);
 
     const wait = await post('/waitForSnapshot', {
       data: { snapshotId: result.snapshotId },
     });
     expect(wait.status).toBe(200);
+    expect(wait.headers.get('x-genkit-trace-id')).toMatch(/^[0-9a-f]{32}$/);
+    expect(wait.headers.get('x-genkit-span-id')).toMatch(/^[0-9a-f]{16}$/);
 
     const abort = await post('/abort', {
       data: { snapshotId: result.snapshotId },
     });
     expect(abort.status).toBe(200);
+  });
+
+  test.each([
+    ['/getSnapshot', 'snapshotId'],
+    ['/getSnapshot', 'sessionId'],
+    ['/waitForSnapshot', 'snapshotId'],
+  ] as const)(
+    'answers 404 NOT_FOUND on %s with an unknown %s',
+    async (path, idName) => {
+      const { post } = await setup();
+      const res = await post(path, { data: { [idName]: 'missing' } });
+      expect(res.status).toBe(404);
+      expect(await res.json()).toEqual({
+        status: 'NOT_FOUND',
+        message: "Snapshot 'missing' not found for agent 'testAgent'.",
+      });
+    },
+  );
+
+  test.each([
+    ['?stream=true', {}],
+    ['', { accept: 'text/event-stream' }],
+  ])(
+    'streams a snapshot read as one result frame (%s %o)',
+    async (query, headers) => {
+      const { post, base } = await setup({ lock: false });
+      const first = await post('/', {
+        data: turn(),
+        init: { sessionId: 's1' },
+      });
+      const { result } = (await first.json()) as {
+        result: { snapshotId: string };
+      };
+      const read = (path: string, snapshotId: string) =>
+        fetch(`${base}${path}${query}`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', ...headers },
+          body: JSON.stringify({ data: { snapshotId } }),
+        });
+
+      for (const path of ['/getSnapshot', '/waitForSnapshot']) {
+        const ok = await read(path, result.snapshotId);
+        expect(ok.status).toBe(200);
+        expect(ok.headers.get('content-type')).toBe('text/plain');
+        const text = await ok.text();
+        expect(text.endsWith('\n\n')).toBe(true);
+        expect(text.startsWith('data: ')).toBe(true);
+        expect(JSON.parse(text.slice('data: '.length))).toMatchObject({
+          result: { snapshotId: result.snapshotId },
+        });
+
+        const missing = await read(path, 'missing');
+        expect(missing.status).toBe(200);
+        expect(await missing.text()).toBe(
+          `error: ${JSON.stringify({
+            error: {
+              status: 'NOT_FOUND',
+              message: "Snapshot 'missing' not found for agent 'testAgent'.",
+            },
+          })}\n\n`,
+        );
+      }
+    },
+  );
+
+  test.each([
+    ['?stream=true', {}],
+    ['', { accept: 'text/event-stream' }],
+  ])(
+    'answers a streaming request with malformed input with a JSON 400 (%s %o)',
+    async (query, headers) => {
+      const { base } = await setup();
+      const res = await fetch(`${base}/getSnapshot${query}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', ...headers },
+        body: JSON.stringify({ data: { snapshotId: 5 } }),
+      });
+      expect(res.status).toBe(400);
+      expect(res.headers.get('content-type')).toMatch(/^application\/json/);
+      expect(await res.json()).toEqual({
+        status: 'INVALID_ARGUMENT',
+        message: 'Malformed snapshot request.',
+      });
+    },
+  );
+
+  test("passes Genkit's own INVALID_ARGUMENT through without schema details", async () => {
+    const { post } = await setup();
+    const res = await post('/waitForSnapshot', { data: {} });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({
+      status: 'INVALID_ARGUMENT',
+      message: "waitForSnapshot requires a 'snapshotId' for agent 'testAgent'.",
+    });
+  });
+
+  test('answers /abort of an unknown snapshot with 200 and no status', async () => {
+    const { post } = await setup();
+    const res = await post('/abort', { data: { snapshotId: 'missing' } });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ result: { snapshotId: 'missing' } });
+  });
+
+  test.each([
+    ['/getSnapshot', { snapshotId: 5 }],
+    ['/waitForSnapshot', { snapshotId: 'x', metadataOnly: 'yes' }],
+    ['/abort', {}],
+    ['/abort', { snapshotId: 5 }],
+  ] as const)(
+    'answers a terse 400 for malformed input on %s',
+    async (path, data) => {
+      const { post } = await setup();
+      const res = await post(path, { data });
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({
+        status: 'INVALID_ARGUMENT',
+        message: 'Malformed snapshot request.',
+      });
+    },
+  );
+
+  const storeReturning = (
+    getSnapshot: SessionStore['getSnapshot'],
+  ): SessionStore => {
+    const inner = new InMemorySessionStore();
+    return {
+      getSnapshot,
+      saveSnapshot: (id, mutator, options) =>
+        inner.saveSnapshot(id, mutator, options),
+    };
+  };
+
+  test('logs and answers 500 INTERNAL for a store error with a 5xx status', async () => {
+    vi.mocked(logger.error).mockClear();
+    const store = storeReturning(async () => {
+      throw new GenkitError({ status: 'UNAVAILABLE', message: 'db down' });
+    });
+    const { post } = await setup({ store });
+    const res = await post('/getSnapshot', { data: { snapshotId: 'bad' } });
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({
+      status: 'INTERNAL',
+      message: 'Internal Error',
+    });
+    expect(logger.error).toHaveBeenCalledWith(
+      'Agent action failed',
+      expect.any(GenkitError),
+    );
+  });
+
+  test('logs the parse errors but not the data of a stored snapshot that fails the output schema', async () => {
+    vi.mocked(logger.error).mockClear();
+    const store = storeReturning(async () => ({
+      snapshotId: 'bad',
+      createdAt: 42 as unknown as string,
+      status: 'completed',
+      state: {
+        messages: [{ role: 'user', content: [{ text: 'SECRET-MARKER' }] }],
+      },
+    }));
+    const { post } = await setup({ store });
+    const res = await post('/getSnapshot', { data: { snapshotId: 'bad' } });
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({
+      status: 'INTERNAL',
+      message: 'Internal Error',
+    });
+    expect(logger.error).toHaveBeenCalledTimes(1);
+    const logged = vi
+      .mocked(logger.error)
+      .mock.calls[0]?.map((arg) =>
+        arg instanceof Error
+          ? `${arg.message} ${arg.stack} ${JSON.stringify(arg)}`
+          : JSON.stringify(arg),
+      )
+      .join(' ');
+    expect(logged).toContain('Agent action failed');
+    expect(logged).toContain('INVALID_ARGUMENT');
+    expect(logged).toContain('createdAt');
+    expect(logged).not.toContain('SECRET-MARKER');
+  });
+
+  test('drops a read that finishes after the client left, without a log', async () => {
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const started = vi.fn();
+    const finished = vi.fn();
+    const store = storeReturning(async () => {
+      started();
+      await gate;
+      finished();
+      return { snapshotId: 'late', createdAt: new Date(0).toISOString() };
+    });
+    const { base } = await setup({ store });
+    const client = new AbortController();
+    const read = fetch(`${base}/getSnapshot`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ data: { snapshotId: 'late' } }),
+      signal: client.signal,
+    }).catch((e: unknown) => e);
+    await vi.waitFor(() => expect(started).toHaveBeenCalled());
+    vi.mocked(logger.error).mockClear();
+    client.abort();
+    await read;
+    await new Promise((r) => setTimeout(r, 20));
+    release();
+    await vi.waitFor(() => expect(finished).toHaveBeenCalled());
+    await new Promise((r) => setTimeout(r, 50));
+    expect(logger.error).not.toHaveBeenCalled();
+  });
+
+  test('does not log a snapshot that is not found', async () => {
+    vi.mocked(logger.error).mockClear();
+    const { post } = await setup();
+    const res = await post('/getSnapshot', { data: { snapshotId: 'x' } });
+    expect(res.status).toBe(404);
+    expect(logger.error).not.toHaveBeenCalled();
+  });
+
+  test('stops waiting on a pending snapshot when the client disconnects', async () => {
+    const inner = new InMemorySessionStore();
+    const subscribed = vi.fn();
+    const unsubscribed = vi.fn();
+    let pending = false;
+    const store: SessionStore = {
+      getSnapshot: async (o) => {
+        const snap = await inner.getSnapshot(o);
+        return snap && pending ? { ...snap, status: 'pending' } : snap;
+      },
+      saveSnapshot: (id, mutator, options) =>
+        inner.saveSnapshot(id, mutator, options),
+      onSnapshotStateChange: (id) => {
+        subscribed(id);
+        return unsubscribed;
+      },
+    };
+    const { post, base } = await setup({ store, lock: false });
+    const first = await post('/', { data: turn(), init: { sessionId: 's1' } });
+    const { result } = (await first.json()) as {
+      result: { snapshotId: string };
+    };
+
+    pending = true;
+    const client = new AbortController();
+    const wait = fetch(`${base}/waitForSnapshot`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ data: { snapshotId: result.snapshotId } }),
+      signal: client.signal,
+    }).catch((e: unknown) => e);
+    await vi.waitFor(() =>
+      expect(subscribed).toHaveBeenCalledWith(result.snapshotId),
+    );
+    expect(unsubscribed).not.toHaveBeenCalled();
+    vi.mocked(logger.error).mockClear();
+    client.abort();
+    await wait;
+    await vi.waitFor(() => expect(unsubscribed).toHaveBeenCalled(), {
+      timeout: 2000,
+    });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(logger.error).not.toHaveBeenCalled();
   });
 
   test('locks a snapshotId resume by its session', async () => {

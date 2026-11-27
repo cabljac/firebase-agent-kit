@@ -1,6 +1,6 @@
 import { AgentError } from 'genkit/beta/client';
 import { AUTH_NETWORK_ERROR, AuthError, UsageError } from './auth.js';
-import { SessionLoadError } from './chat.js';
+import { SessionLoadError, SnapshotReadError } from './chat.js';
 import { ConfigFileError } from './store.js';
 
 /** The kinds of failure the UI explains differently. */
@@ -146,6 +146,19 @@ export function explain(err: unknown, ctx: ExplainContext = {}): Problem {
       hint: 'Check the session id, or type /new to start a new session.',
     };
   }
+  if (err instanceof SnapshotReadError) {
+    const cause = err.cause instanceof Error ? err.cause : undefined;
+    const server = cause && parseServerError(cause.message);
+    if (server?.httpStatus === 404 && server.status === 'NOT_FOUND') {
+      return {
+        kind: 'session-not-found',
+        title: 'Session not found',
+        detail: server.message || undefined,
+        hint: 'Check the session id, or type /new to start a new session.',
+      };
+    }
+    return explain(err.cause, ctx);
+  }
   const message = err instanceof Error ? err.message : String(err);
   if (
     isNetworkError(err) ||
@@ -205,6 +218,7 @@ export function explain(err: unknown, ctx: ExplainContext = {}): Problem {
         }
         break;
       case 404:
+        if (server.status) break;
         return {
           kind: 'not-found',
           title: 'No agent at this URL',

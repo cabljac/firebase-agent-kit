@@ -290,7 +290,7 @@ A crashed worker leaves its run document as `running` or `detached`, without a f
 ## Limits
 
 - **Detached turns need the `detach` option.** Without it, a request with `detach: true` gets 400 `FAILED_PRECONDITION`. See [Detached turns](#detached-turns-experimental) for their own limits.
-- **Denied reads return 500.** When a user asks for a snapshot that is not theirs, `@genkit-ai/express` returns 500 for the `NOT_FOUND` error. This comes from upstream.
+- **Denied reads look like missing snapshots.** When a user asks `/getSnapshot` or `/waitForSnapshot` for a snapshot that is not theirs, the answer is 404 `NOT_FOUND`, the same as for an id that does not exist.
 - **No session list.** Session documents sit under the user key, a sha256 hash, and there is no route that lists them. Clients must keep their own session ids.
 - **Sessions are scoped by user unless you set a scope.** Without `scope`, a client can load a session of one agent into another agent that uses the same collections, for the same user only. Give the store of each agent its own `scope` (see Session scope under What it does) or its own `collection` to keep their sessions apart.
 - **No cleanup.** Documents in the session and lock collections stay in Firestore until you delete them. The library sets no TTL on them; run documents carry an `expireAt` field for a TTL policy. A turn deletes its lock document when it ends, but a lock from a turn that did not end cleanly stays.

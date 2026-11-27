@@ -232,7 +232,7 @@ describe('firebase-agent-kit sessions per instance', () => {
     ['/getSnapshot', 'sessionId'],
     ['/waitForSnapshot', 'snapshotId'],
   ] as const)(
-    "sales answers 500 INTERNAL when the same user calls %s with a support session's %s",
+    "sales answers 404 NOT_FOUND when the same user calls %s with a support session's %s",
     async (path, idName) => {
       const session = await startSupportSession();
       const { user, sessionId, snapshotId } = session;
@@ -245,8 +245,11 @@ describe('firebase-agent-kit sessions per instance', () => {
           user.idToken,
         ),
       ).toEqual({
-        status: 500,
-        body: { status: 'INTERNAL', message: 'Internal Error' },
+        status: 404,
+        body: {
+          status: 'NOT_FOUND',
+          message: `Snapshot '${ids[idName]}' not found for agent 'sales'.`,
+        },
       });
       await expectSupportResumes(user.idToken, session);
     },

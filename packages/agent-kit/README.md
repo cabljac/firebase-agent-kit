@@ -477,9 +477,9 @@ The main entry reads the instance id and defines the params when it loads, so us
 ## Limits
 
 - **Detached turns are experimental and off by default.** See `DETACHED_TURNS` in [Configuration](#configuration).
-- **Denied reads return 500.** When a user asks for a snapshot that is not theirs, `@genkit-ai/express` returns 500 for the `NOT_FOUND` error.
+- **Denied reads look like missing snapshots.** When a user asks `/getSnapshot` or `/waitForSnapshot` for a snapshot that is not theirs, the answer is 404 `NOT_FOUND`, the same as for an id that does not exist.
 - **No session list.** There is no route that lists sessions. Clients must keep their own session ids.
-- **Sessions belong to one instance.** All instances share the session collections, but each instance keys its sessions by the instance id and the user. When a client sends the snapshot id of another instance, the instance answers as for a snapshot of another user: `NOT_FOUND` on a turn, 500 on `/getSnapshot` and `/waitForSnapshot`. A turn with the session id of another instance starts a new session in this instance. If you rename an instance, its sessions stay under the old instance id, and the renamed instance cannot load them.
+- **Sessions belong to one instance.** All instances share the session collections, but each instance keys its sessions by the instance id and the user. When a client sends the snapshot id of another instance, the instance answers as for a snapshot of another user: `NOT_FOUND` on a turn, 404 `NOT_FOUND` on `/getSnapshot` and `/waitForSnapshot`. A turn with the session id of another instance starts a new session in this instance. If you rename an instance, its sessions stay under the old instance id, and the renamed instance cannot load them.
 - **No cleanup.** Documents in the session and lock collections stay in Firestore until you delete them. The kit sets no TTL on them; run documents have an `expireAt` field for a TTL policy. A turn deletes its lock document when it ends, but a lock from a turn that did not end cleanly stays.
 - **No multipart tools.** `ai.defineTool` takes no `multipart: true` config.
 - **One model provider.** The kit registers only the Vertex AI plugin. Use `ai.defineModel` for anything else.
