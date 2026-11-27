@@ -119,11 +119,36 @@ test('says when a detached turn stopped on an interrupt it cannot read', async (
     status: 'unreadable-interrupt',
     text: '',
   });
-  const { out } = await runLines(session, ['/detach pay', 'approve']);
-  expect(out).toContain('stopped on an interrupt that fak cannot read');
+  const { code, out, err } = await runLines(session, [
+    '/detach pay',
+    'approve',
+  ]);
+  expect(code).toBe(1);
+  expect(err).toContain('stopped on an interrupt that fak cannot read');
   expect(out).not.toContain('approval needed');
   expect(session.turns).toEqual([{ message: 'approve' }]);
 });
+
+test.each([
+  ['failed', 'Detached turn failed. model said no'],
+  ['aborted', 'Detached turn aborted. model said no'],
+  ['expired', 'The worker of the detached turn stopped.'],
+] as const)(
+  'writes a detached turn that %s to stderr and exits 1',
+  async (status, text) => {
+    const session = new FakeSession(async () => done(''));
+    session.detachScript = async (snapshotId) => ({
+      snapshotId,
+      status,
+      text: '',
+      detail: 'model said no',
+    });
+    const { code, out, err } = await runLines(session, ['/detach build it']);
+    expect(code).toBe(1);
+    expect(err).toContain(text);
+    expect(out).not.toContain('Detached turn');
+  },
+);
 
 test('writes a failed turn to stderr and exits 1', async () => {
   const session = new FakeSession(async () => {
@@ -202,6 +227,7 @@ test('resuming a session whose detached worker stopped says how to continue', as
     async () => done(''),
     async () => ({ history: [], pending: [], expired: 'snap9' }),
   );
-  const { out } = await runLines(session, [], 'old');
-  expect(out).toContain('Send a message to continue');
+  const { code, err } = await runLines(session, [], 'old');
+  expect(code).toBe(1);
+  expect(err).toContain('Send a message to continue');
 });
