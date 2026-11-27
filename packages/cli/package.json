@@ -2,7 +2,22 @@
   "name": "@cabljac/firebase-agent-kit-cli",
   "version": "0.0.0",
   "description": "Terminal chat client for Genkit agents served from Cloud Functions",
+  "keywords": [
+    "genkit",
+    "firebase",
+    "cloud-functions",
+    "agents",
+    "ai",
+    "cli",
+    "terminal",
+    "chat"
+  ],
   "license": "Apache-2.0",
+  "author": "Jacob Cable",
+  "homepage": "https://github.com/cabljac/firebase-agent-kit/tree/main/packages/cli#readme",
+  "bugs": {
+    "url": "https://github.com/cabljac/firebase-agent-kit/issues"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/cabljac/firebase-agent-kit.git",

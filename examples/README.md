@@ -157,6 +157,8 @@ The generated files are copied from the firebase-tools 15.36.0 templates and cod
 | `firebase.json` `functions` block    | `addKitToConfig` and `addInstanceToKitConfig` in `functions/kits/install.js`, written with `JSON.stringify(config, null, 2)`.                                                                                                                                          |
 | `config-<instance>/.env.<projectId>` | `promptAndWriteKitParams` in `functions/kits/install.js` and `writeUserEnvs` in `functions/env.js`: one `KEY=value` line per param, in the order the code defines them.                                                                                                |
 
+CI lints the files that the user wrote. It does not typecheck or build them, because the example is not part of the pnpm workspace.
+
 Inferred, not generated:
 
 - The kit version is `^0.0.0`, the version in this repo. A published version would differ.

@@ -28,12 +28,16 @@ const InitIdsSchema = z.object({
 });
 
 /** Rejects turns that ask to detach, for an agent that has no detach config. */
-export function assertNotDetach(input: unknown): void {
+export function assertNotDetach(
+  input: unknown,
+  detachConfigured: boolean,
+): void {
   if (DetachInputSchema.safeParse(input).success) {
     throw new GenkitError({
       status: 'FAILED_PRECONDITION',
-      message:
-        'Detached turns are not supported on Cloud Functions in this version.',
+      message: detachConfigured
+        ? 'Detached turns are turned off for this agent.'
+        : 'Detached turns are not enabled for this agent. Pass the detach option to onAgentRequest.',
     });
   }
 }

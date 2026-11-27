@@ -30,6 +30,16 @@ interface RefundInput {
   currency: string;
 }
 
+function isRefundInput(value: unknown): value is RefundInput {
+  if (typeof value !== 'object' || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return (
+    typeof v.orderId === 'string' &&
+    typeof v.amount === 'number' &&
+    typeof v.currency === 'string'
+  );
+}
+
 let current: { uid: string; chat: AgentChat } | undefined;
 
 async function chatFor(uid: string): Promise<AgentChat> {
@@ -69,10 +79,15 @@ export async function ask(
       (i) => i.name === 'approveRefund',
     );
     if (!approval) return;
-    const { orderId, amount, currency } = approval.input as RefundInput;
-    const approved = await confirm(
-      `Request a refund of ${amount} ${currency} for order ${orderId}?`,
-    );
+    let approved = false;
+    if (isRefundInput(approval.input)) {
+      const { orderId, amount, currency } = approval.input;
+      approved = await confirm(
+        `Request a refund of ${amount} ${currency} for order ${orderId}?`,
+      );
+    } else {
+      render('The refund request was malformed, so it was declined.\n');
+    }
     response = await chat.resume({ respond: [approval.respond({ approved })] });
     render(response.text);
   }

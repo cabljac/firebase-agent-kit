@@ -36,14 +36,28 @@ const u1Key = (sessionId: string) => `${sha256('[null,"u1"]')}:${sessionId}`;
 
 describe('assertNotDetach', () => {
   test('throws FAILED_PRECONDITION when detach is true', () => {
-    expect(() => assertNotDetach({ detach: true })).toThrowError(GenkitError);
+    expect(() => assertNotDetach({ detach: true }, false)).toThrowError(
+      GenkitError,
+    );
     try {
-      assertNotDetach({ detach: true });
+      assertNotDetach({ detach: true }, false);
     } catch (e) {
       expect(e).toBeInstanceOf(GenkitError);
       expect((e as GenkitError).status).toBe('FAILED_PRECONDITION');
       expect((e as GenkitError).code).toBe(400);
     }
+  });
+
+  test('tells the caller to pass the detach option when none is configured', () => {
+    expect(() => assertNotDetach({ detach: true }, false)).toThrowError(
+      'Detached turns are not enabled for this agent. Pass the detach option to onAgentRequest.',
+    );
+  });
+
+  test('says detached turns are turned off when the option is configured', () => {
+    expect(() => assertNotDetach({ detach: true }, true)).toThrowError(
+      'Detached turns are turned off for this agent.',
+    );
   });
 
   test.each([
@@ -54,7 +68,7 @@ describe('assertNotDetach', () => {
     [{ detach: false }],
     [{ detach: 'true' }],
   ])('allows %j', (input) => {
-    expect(() => assertNotDetach(input)).not.toThrow();
+    expect(() => assertNotDetach(input, false)).not.toThrow();
   });
 });
 

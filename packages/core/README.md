@@ -4,7 +4,7 @@
 
 Serve [Genkit](https://genkit.dev) agents from Firebase Cloud Functions, with per-user sessions and one turn at a time per session. This is the library under [`@cabljac/firebase-agent-kit`](https://github.com/cabljac/firebase-agent-kit/tree/main/packages/agent-kit#readme). Use it directly when you want to write the `onRequest` function yourself instead of installing the kit.
 
-`expressHandler(agent)` from `@genkit-ai/express` can already serve an agent from an `onRequest` function. This library adds what a multi-user production deployment needs on top of that route:
+`expressHandler(agent)` from `@genkit-ai/express` can already serve an agent from an `onRequest` function. This library adds what a multi-user deployment needs on top of that route:
 
 - **Firebase Auth on every route.** The turn route and the `/getSnapshot`, `/waitForSnapshot` and `/abort` routes all need a valid ID token. App Check is optional.
 - **A uid-scoped session store.** One user cannot read, resume or abort the session of another user.
@@ -295,6 +295,14 @@ A crashed worker leaves its run document as `running` or `detached`, without a f
 - **Abort of another user's turn does nothing.** `/abort` with the snapshot id of another user answers 200 with no `status`, and the turn continues. The client's `abort()` resolves `undefined`.
 - **Sessions are scoped by user unless you set a scope.** Without `scope`, a client can load a session of one agent into another agent that uses the same collections, for the same user only. Give the store of each agent its own `scope` (see Session scope under What it does) or its own `collection` to keep their sessions apart.
 - **No cleanup.** Documents in the session and lock collections stay in Firestore until you delete them. The library sets no TTL on them; run documents carry an `expireAt` field for a TTL policy. A turn deletes its lock document when it ends, but a lock from a turn that did not end cleanly stays.
+
+## Upstream workarounds
+
+The code works around two upstream problems and reads some upstream internals. No upstream issues are filed yet.
+
+- **Snapshot and abort routes.** `packages/core/src/handler.ts` runs the `/getSnapshot`, `/waitForSnapshot` and `/abort` actions itself, not through `expressHandler` of `@genkit-ai/express`. In `@genkit-ai/express` 1.44.0, the `exports` map lists `default` before `import`. ESM importers get the CJS build of `@genkit-ai/express`, which uses the CJS build of `genkit`, so `instanceof GenkitError` fails for errors thrown by the ESM build. The turn route still uses `expressHandler`. Errors from the checks before it (auth, `beforeTurn`, lock 409, unknown snapshot 404) keep their real status. A `GenkitError` thrown by the agent during the turn gets 500.
+- **Bare names in `use:`.** `acceptMiddlewareNames` in `packages/agent-kit/src/lib.ts` patches `registry.dotprompt.renderMetadata`. Genkit 1.44 drops bare string entries in the `use:` frontmatter of a prompt at generate time. The object form `{ name }` works.
+- **Internals that the code reads.** `__action` (`packages/core/src/handler.ts`, `packages/agent-kit/src/lib.ts`), the firebase-functions `__endpoint` (`packages/core/src/handler.ts`), the registry keys `/tool/`, `/tool.v2/` and `/prompt/` (`packages/agent-kit/src/lib.ts`), and an `ai` object built with `Object.create(instance)` (`packages/agent-kit/src/lib.ts`). A Genkit or firebase-functions upgrade can break any of them. No test is written as a canary for them. The unit and emulator tests run these paths, so a break should show up there.
 
 ## Local development
 

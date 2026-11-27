@@ -214,7 +214,10 @@ describe('detached turns on the turn route', () => {
     const { post, enqueued } = await setup({ enabled: false });
     const res = await post(detachTurn());
     expect(res.status).toBe(400);
-    expect(await res.json()).toMatchObject({ status: 'FAILED_PRECONDITION' });
+    expect(await res.json()).toMatchObject({
+      status: 'FAILED_PRECONDITION',
+      message: 'Detached turns are turned off for this agent.',
+    });
     expect(enqueued).toHaveLength(0);
   });
 

@@ -2,7 +2,19 @@
   "name": "@cabljac/firebase-agent-kit-core",
   "version": "0.0.0",
   "description": "Serve Genkit agents from Firebase Cloud Functions with per-user sessions and turn locking",
+  "keywords": [
+    "genkit",
+    "firebase",
+    "cloud-functions",
+    "agents",
+    "ai"
+  ],
   "license": "Apache-2.0",
+  "author": "Jacob Cable",
+  "homepage": "https://github.com/cabljac/firebase-agent-kit/tree/main/packages/core#readme",
+  "bugs": {
+    "url": "https://github.com/cabljac/firebase-agent-kit/issues"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/cabljac/firebase-agent-kit.git",
