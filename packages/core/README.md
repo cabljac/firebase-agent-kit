@@ -91,6 +91,8 @@ const agent = remoteAgent({
 
 See [Client](#client) for sessions, streaming, interrupts and errors.
 
+To export Genkit traces, metrics and logs to Google Cloud, call `enableGoogleCloudTelemetry()` from `@genkit-ai/google-cloud` once, before the first request. Call it at module top level, or from the `ready` option of `onAgentRequest` and `onAgentTask`. Each function awaits `ready` before it handles a request or task, so return the same promise on every call. When `ready` rejects, `onAgentRequest` answers 500 `INTERNAL` and `onAgentTask` fails the task. The runtime service account needs `roles/cloudtrace.agent`, `roles/monitoring.metricWriter` and `roles/logging.logWriter`.
+
 ## Browser clients and CORS
 
 A browser sends a CORS preflight before each request with an `Authorization` header. `onRequest` answers it only when `httpsOptions.cors` is set. Set it to your web origins:

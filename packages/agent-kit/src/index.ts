@@ -20,6 +20,7 @@ import {
   checkAtColdStart,
   createKitGenkit,
   createPromptCheck,
+  googleCloudTelemetryReady,
   type KitGenkit,
   kitMiddlewarePlugins,
   withLazyLocation,
@@ -45,11 +46,26 @@ requiresAPI(
   'cloudtasks.googleapis.com',
   'Queues detached agent turns for the agentWorker function.',
 );
+requiresAPI(
+  'cloudtrace.googleapis.com',
+  'Receives Genkit traces when GOOGLE_CLOUD_TELEMETRY is enabled.',
+);
+requiresAPI(
+  'monitoring.googleapis.com',
+  'Receives Genkit metrics when GOOGLE_CLOUD_TELEMETRY is enabled.',
+);
+requiresAPI(
+  'logging.googleapis.com',
+  'Receives Genkit logs when GOOGLE_CLOUD_TELEMETRY is enabled.',
+);
 requiresRole('roles/aiplatform.user');
 requiresRole('roles/datastore.user');
 requiresRole('roles/cloudtasks.enqueuer');
 requiresRole('roles/firebaseauth.viewer');
 requiresRole('roles/run.invoker');
+requiresRole('roles/cloudtrace.agent');
+requiresRole('roles/monitoring.metricWriter');
+requiresRole('roles/logging.logWriter');
 
 const corsOrigins = defineList('CORS_ORIGINS', {
   label: 'Allowed browser origins',
@@ -138,9 +154,20 @@ const workerTimeoutSeconds = defineInt('WORKER_TIMEOUT_SECONDS', {
   },
 });
 
+const googleCloudTelemetry = defineBoolean('GOOGLE_CLOUD_TELEMETRY', {
+  label: 'Google Cloud telemetry',
+  description:
+    'If enabled, Genkit exports the traces, metrics and logs of agent turns to Cloud Trace, Cloud Monitoring and Cloud Logging.',
+  default: false,
+  input: select({ Enabled: true, Disabled: false }),
+});
+
 const instanceId = process.env.FIREBASE_KIT_INSTANCE_ID ?? 'default';
 
 if (getApps().length === 0) initializeApp();
+const telemetryReady = googleCloudTelemetryReady(() =>
+  googleCloudTelemetry.value(),
+);
 
 const instance = genkit({
   plugins: [
@@ -175,7 +202,11 @@ const promptCheck = createPromptCheck({
   registry: instance.registry,
   instanceId,
   knownTools: () => toolNames,
-  booleanParams: [enforceAppCheck.name, detachedTurns.name],
+  booleanParams: [
+    enforceAppCheck.name,
+    detachedTurns.name,
+    googleCloudTelemetry.name,
+  ],
   detachedTurns: {
     enabled: detachedTurns.name,
     workerTimeoutSeconds: workerTimeoutSeconds.name,
@@ -194,6 +225,7 @@ export const agent = onAgentRequest(kitAgent, {
   enforceAppCheck,
   authorize: promptCheck,
   detach,
+  ready: telemetryReady,
 });
 
 /**
@@ -203,4 +235,5 @@ export const agent = onAgentRequest(kitAgent, {
 export const agentWorker = onAgentTask(kitAgent, detach, {
   memory,
   rateLimits: { maxConcurrentDispatches: 10 },
+  ready: telemetryReady,
 });

@@ -38,6 +38,9 @@ importers:
       '@genkit-ai/firebase':
         specifier: 1.44.0
         version: 1.44.0(@google-cloud/firestore@9.4.1)(firebase-admin@14.5.1)(genkit@1.44.0(@google-cloud/firestore@9.4.1)(firebase-admin@14.5.1))
+      '@genkit-ai/google-cloud':
+        specifier: 1.44.0
+        version: 1.44.0(genkit@1.44.0(@google-cloud/firestore@9.4.1)(firebase-admin@14.5.1))
       '@genkit-ai/google-genai':
         specifier: 1.44.0
         version: 1.44.0(genkit@1.44.0(@google-cloud/firestore@9.4.1)(firebase-admin@14.5.1))

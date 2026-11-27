@@ -138,6 +138,13 @@ export interface AgentRequestOptions<S = unknown> {
    */
   httpsOptions?: HttpsOptions;
   /**
+   * Awaited at the start of every request, before authentication, for setup
+   * that must finish before the first request is served. Return the same
+   * promise each time to run the setup once. A rejection answers the request
+   * with 500 `INTERNAL`.
+   */
+  ready?: () => Promise<void>;
+  /**
    * Turn lock. Defaults to a {@link FirestoreTurnLock}; `false` disables
    * locking, which is safe only when turns on one session never overlap.
    */

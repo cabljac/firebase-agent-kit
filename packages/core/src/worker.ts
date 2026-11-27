@@ -279,6 +279,18 @@ async function getUserOrUndefined(uid: string) {
   }
 }
 
+/** Options for {@link onAgentTask}: Cloud Tasks options and `ready`. */
+export interface AgentTaskOptions
+  extends Omit<TaskQueueOptions, 'retryConfig' | 'timeoutSeconds'> {
+  /**
+   * Awaited at the start of every task, for setup that must finish before
+   * the first task is handled. Return the same promise each time to run the
+   * setup once. A rejection fails the task, which is not retried, so its run
+   * is never claimed.
+   */
+  ready?: () => Promise<void>;
+}
+
 /**
  * Builds the Cloud Tasks worker that runs the detached turns of `agent`. Pass
  * the same `detach` object as the `detach` option of {@link onAgentRequest},
@@ -290,7 +302,7 @@ async function getUserOrUndefined(uid: string) {
 export function onAgentTask<S>(
   agent: Agent<S>,
   handle: DetachedTurns<S>,
-  taskOptions: Omit<TaskQueueOptions, 'retryConfig' | 'timeoutSeconds'> = {},
+  { ready, ...taskOptions }: AgentTaskOptions = {},
 ): TaskQueueFunction<AgentTaskData> {
   const detach = detachedTurnsConfig(handle);
   const runs = new FirestoreRunStore(detach.firestore, detach.runsCollection);
@@ -303,6 +315,7 @@ export function onAgentTask<S>(
       timeoutSeconds: detach.functionTimeout,
     },
     async (request) => {
+      await ready?.();
       const runId: unknown = request.data?.runId;
       if (typeof runId !== 'string' || !runId) {
         logger.error('Detached task without a runId.');

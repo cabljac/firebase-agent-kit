@@ -77,6 +77,22 @@ describe('deploy discovery', () => {
     expect(JSON.stringify(manifest)).toContain('roles/firebaseauth.viewer');
   });
 
+  test('declares the telemetry APIs and write roles', async () => {
+    const { manifest } = await discover('support');
+    expect(manifest.requiredAPIs).toEqual(
+      expect.arrayContaining(
+        [
+          'cloudtrace.googleapis.com',
+          'monitoring.googleapis.com',
+          'logging.googleapis.com',
+        ].map((api) => expect.objectContaining({ api })),
+      ),
+    );
+    expect(JSON.stringify(manifest)).toContain('roles/cloudtrace.agent');
+    expect(JSON.stringify(manifest)).toContain('roles/monitoring.metricWriter');
+    expect(JSON.stringify(manifest)).toContain('roles/logging.logWriter');
+  });
+
   test('declares the kit params and binds the function options to them', async () => {
     const { manifest } = await discover('support');
     expect(manifest.endpoints.agent).toMatchObject({
@@ -96,6 +112,7 @@ describe('deploy discovery', () => {
       ['VERTEX_LOCATION', 'string'],
       ['DETACHED_TURNS', 'boolean'],
       ['WORKER_TIMEOUT_SECONDS', 'int'],
+      ['GOOGLE_CLOUD_TELEMETRY', 'boolean'],
     ]);
     expect(manifest.params).toEqual(
       expect.arrayContaining([
@@ -111,6 +128,10 @@ describe('deploy discovery', () => {
         expect.objectContaining({
           name: 'WORKER_TIMEOUT_SECONDS',
           default: 540,
+        }),
+        expect.objectContaining({
+          name: 'GOOGLE_CLOUD_TELEMETRY',
+          default: false,
         }),
       ]),
     );

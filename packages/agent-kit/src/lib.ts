@@ -635,6 +635,45 @@ export function checkAtColdStart(check: () => Promise<void>): void {
   });
 }
 
+const TELEMETRY_FAILED =
+  'Agent kit could not enable Google Cloud telemetry. Agent turns on this instance fail until it restarts.';
+
+async function enableTelemetry(enabled: () => boolean): Promise<void> {
+  if (!enabled()) return;
+  try {
+    const { enableGoogleCloudTelemetry } = await import(
+      '@genkit-ai/google-cloud'
+    );
+    // Genkit keeps this promise and every span awaits it, so a rejection fails each turn.
+    enableGoogleCloudTelemetry().catch((err: unknown) =>
+      logger.error(TELEMETRY_FAILED, err),
+    );
+  } catch (err) {
+    logger.error(TELEMETRY_FAILED, err);
+    throw err;
+  }
+}
+
+/**
+ * Returns a `ready` hook for `onAgentRequest` and `onAgentTask`. On its
+ * first call, it reads `enabled()`. When that is `true`, it imports
+ * `@genkit-ai/google-cloud` and calls `enableGoogleCloudTelemetry` once, so
+ * Genkit exports traces, metrics and logs to Google Cloud. When it is
+ * `false`, it imports nothing. Every later call returns the same promise.
+ *
+ * Setup fails closed: a failed import rejects the hook, and a rejected
+ * `enableGoogleCloudTelemetry` makes Genkit fail every span. Both are logged.
+ */
+export function googleCloudTelemetryReady(
+  enabled: () => boolean,
+): () => Promise<void> {
+  let ready: Promise<void> | undefined;
+  return () => {
+    ready ??= enableTelemetry(enabled);
+    return ready;
+  };
+}
+
 type VertexAIOptions = NonNullable<Parameters<typeof vertexAI>[0]>;
 
 /**
