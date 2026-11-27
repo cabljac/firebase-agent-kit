@@ -155,6 +155,8 @@ export const assistantAgent = onAgentRequest(assistant, {
 
 ## Detached turns (experimental)
 
+For the sequence, the run statuses and crash recovery, see [Detached turns in ARCHITECTURE.md](https://github.com/cabljac/firebase-agent-kit/blob/main/ARCHITECTURE.md#detached-turns).
+
 A detached turn runs in the background: the client gets a snapshot id at once and follows the turn with it. Cloud Functions throttles CPU after the response, so the turn cannot run in the HTTP function. The library hands it to a Cloud Tasks worker instead. Build both functions from one `defineDetachedTurns` object:
 
 ```ts
@@ -298,9 +300,9 @@ A crashed worker leaves its run document as `running` or `detached`, without a f
 
 ## Upstream workarounds
 
-The code works around two upstream problems and reads some upstream internals. No upstream issues are filed yet.
+The code works around two upstream problems and reads some upstream internals. The `exports` order problem is fixed upstream but not yet released. No upstream issue is filed yet for the `use:` problem.
 
-- **Snapshot and abort routes.** `packages/core/src/handler.ts` runs the `/getSnapshot`, `/waitForSnapshot` and `/abort` actions itself, not through `expressHandler` of `@genkit-ai/express`. In `@genkit-ai/express` 1.44.0, the `exports` map lists `default` before `import`. ESM importers get the CJS build of `@genkit-ai/express`, which uses the CJS build of `genkit`, so `instanceof GenkitError` fails for errors thrown by the ESM build. The turn route still uses `expressHandler`. Errors from the checks before it (auth, `beforeTurn`, lock 409, unknown snapshot 404) keep their real status. A `GenkitError` thrown by the agent during the turn gets 500.
+- **Snapshot and abort routes.** `packages/core/src/handler.ts` runs the `/getSnapshot`, `/waitForSnapshot` and `/abort` actions itself, not through `expressHandler` of `@genkit-ai/express`. In `@genkit-ai/express` 1.44.0, the `exports` map lists `default` before `import`. ESM importers get the CJS build of `@genkit-ai/express`, which uses the CJS build of `genkit`, so `instanceof GenkitError` fails for errors thrown by the ESM build. The turn route still uses `expressHandler`. Errors from the checks before it (auth, `authorize`, parsing, `beforeTurn`, the lock 409, and the 404 for an unknown snapshot on a detached turn) keep their real status. Genkit catches most errors in a turn itself, such as a tool or model error or an unknown `snapshotId`. It answers them with HTTP 200 and a result with `finishReason: 'failed'` and the error's status. An error that escapes the agent action, such as an `AgentInitError` or a failed snapshot write, gets 500 `INTERNAL` with the message `Internal Error`. On a streaming turn the status is already 200, and the response ends with an `error:` frame that holds `INTERNAL`. [genkit-ai/genkit#7323](https://github.com/genkit-ai/genkit/pull/7323) fixes the `exports` order on Genkit main (merged 2026-11-24, not yet released). After the next Genkit release, `runAction` can be removed.
 - **Bare names in `use:`.** `acceptMiddlewareNames` in `packages/agent-kit/src/lib.ts` patches `registry.dotprompt.renderMetadata`. Genkit 1.44 drops bare string entries in the `use:` frontmatter of a prompt at generate time. The object form `{ name }` works.
 - **Internals that the code reads.** `__action` (`packages/core/src/handler.ts`, `packages/agent-kit/src/lib.ts`), the firebase-functions `__endpoint` (`packages/core/src/handler.ts`), the registry keys `/tool/`, `/tool.v2/` and `/prompt/` (`packages/agent-kit/src/lib.ts`), and an `ai` object built with `Object.create(instance)` (`packages/agent-kit/src/lib.ts`). A Genkit or firebase-functions upgrade can break any of them. No test is written as a canary for them. The unit and emulator tests run these paths, so a break should show up there.
 

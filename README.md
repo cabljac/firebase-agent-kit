@@ -16,6 +16,8 @@ client (remoteAgent or fak)
             -> kit-<instance>-agentWorker
 ```
 
+See [ARCHITECTURE.md](ARCHITECTURE.md) for how a turn, the turn lock and detached turns work.
+
 ## What you get
 
 Each kit instance is one agent with its own prompt, tools and params.
