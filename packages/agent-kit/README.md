@@ -419,7 +419,7 @@ An empty list makes firebase-functions log a warning on every request, except in
 
 **`GOOGLE_CLOUD_TELEMETRY`** calls `enableGoogleCloudTelemetry` from `@genkit-ai/google-cloud` once per instance. The first request to `agent` or `agentWorker` waits for the call. With the param off, the kit does not load `@genkit-ai/google-cloud`. Telemetry needs `roles/cloudtrace.agent`, `roles/monitoring.metricWriter` and `roles/logging.logWriter` (see [Required IAM](#required-iam)), and Google Cloud Observability bills for it.
 
-- **A failed setup fails turns.** When the setup fails (for example, no credentials), every agent turn on that instance fails until the instance restarts. If the module cannot load, every request fails. The kit logs `Agent kit could not enable Google Cloud telemetry.` with the cause.
+- **A failed setup fails turns.** When the setup fails (for example, no credentials), every agent turn on that instance fails until the instance shuts down. Cloud Functions does not restart it for this, so redeploy to replace it. If the module cannot load, every request fails. The kit logs `Agent kit could not enable Google Cloud telemetry. Agent turns on this instance fail until it shuts down. Redeploy to replace it.` with the cause.
 - **Do not enable telemetry twice.** With the param on, do not also call `enableGoogleCloudTelemetry()` in the wrapper or set `ENABLE_FIREBASE_MONITORING=true`.
 
 ### Configuration checks

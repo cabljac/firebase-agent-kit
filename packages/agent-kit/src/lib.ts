@@ -636,7 +636,7 @@ export function checkAtColdStart(check: () => Promise<void>): void {
 }
 
 const TELEMETRY_FAILED =
-  'Agent kit could not enable Google Cloud telemetry. Agent turns on this instance fail until it restarts.';
+  'Agent kit could not enable Google Cloud telemetry. Agent turns on this instance fail until it shuts down. Redeploy to replace it.';
 
 async function enableTelemetry(enabled: () => boolean): Promise<void> {
   if (!enabled()) return;

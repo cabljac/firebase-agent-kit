@@ -48,7 +48,7 @@ describe('googleCloudTelemetryReady', () => {
     );
     await nextTick();
     expect(logger.error).toHaveBeenCalledWith(
-      'Agent kit could not enable Google Cloud telemetry. Agent turns on this instance fail until it restarts.',
+      'Agent kit could not enable Google Cloud telemetry. Agent turns on this instance fail until it shuts down. Redeploy to replace it.',
       err,
     );
   });
@@ -65,7 +65,7 @@ describe('googleCloudTelemetryReady', () => {
       expect(ready()).toBe(first);
       expect(logger.error).toHaveBeenCalledOnce();
       expect(logger.error).toHaveBeenCalledWith(
-        'Agent kit could not enable Google Cloud telemetry. Agent turns on this instance fail until it restarts.',
+        'Agent kit could not enable Google Cloud telemetry. Agent turns on this instance fail until it shuts down. Redeploy to replace it.',
         expect.anything(),
       );
     } finally {
