@@ -1,61 +1,89 @@
 import { enableGoogleCloudTelemetry } from '@genkit-ai/google-cloud';
-import { logger, onInit } from 'firebase-functions';
+import { logger } from 'firebase-functions';
+import { genkit, z } from 'genkit';
+import { enableTelemetry } from 'genkit/tracing';
 import { afterEach, describe, expect, test, vi } from 'vitest';
-import { enableTelemetryAtColdStart } from '../../src/lib.js';
+import { googleCloudTelemetryReady } from '../../src/lib.js';
 
-vi.mock('firebase-functions', () => ({
-  logger: { error: vi.fn() },
-  onInit: vi.fn(),
-}));
+vi.mock('firebase-functions', () => ({ logger: { error: vi.fn() } }));
 vi.mock('@genkit-ai/google-cloud', () => ({
   enableGoogleCloudTelemetry: vi.fn(async () => undefined),
 }));
 
 afterEach(() => {
   vi.clearAllMocks();
-  vi.unstubAllEnvs();
 });
 
-/** Runs the callback that `enableTelemetryAtColdStart` gave `onInit`. */
-async function runInit() {
-  expect(onInit).toHaveBeenCalledOnce();
-  await vi.mocked(onInit).mock.calls[0]?.[0]();
-}
+const nextTick = () => new Promise((resolve) => setImmediate(resolve));
 
-describe('enableTelemetryAtColdStart', () => {
-  test('enables nothing when the param is false', async () => {
-    enableTelemetryAtColdStart(() => false);
-    await new Promise((resolve) => setImmediate(resolve));
-    expect(onInit).not.toHaveBeenCalled();
+describe('googleCloudTelemetryReady', () => {
+  test('does not enable telemetry when the param is false', async () => {
+    const ready = googleCloudTelemetryReady(() => false);
+    await ready();
+    await ready();
     expect(enableGoogleCloudTelemetry).not.toHaveBeenCalled();
   });
 
-  test('enables Google Cloud telemetry once before the first invocation when the param is true', async () => {
-    enableTelemetryAtColdStart(() => true);
-    await runInit();
-    await runInit();
+  test('enables Google Cloud telemetry once over many calls when the param is true', async () => {
+    const enabled = vi.fn(() => true);
+    const ready = googleCloudTelemetryReady(enabled);
+    await Promise.all([ready(), ready()]);
+    await ready();
+    expect(enabled).toHaveBeenCalledOnce();
     expect(enableGoogleCloudTelemetry).toHaveBeenCalledOnce();
     expect(enableGoogleCloudTelemetry).toHaveBeenCalledWith();
   });
 
-  test('does not read the param during deploy discovery', () => {
-    vi.stubEnv('FUNCTIONS_CONTROL_API', 'true');
+  test('reads the param only on the first call', () => {
     const enabled = vi.fn(() => true);
-    enableTelemetryAtColdStart(enabled);
+    googleCloudTelemetryReady(enabled);
     expect(enabled).not.toHaveBeenCalled();
-    expect(onInit).not.toHaveBeenCalled();
-    expect(enableGoogleCloudTelemetry).not.toHaveBeenCalled();
   });
 
-  test('logs a failed enable instead of failing the invocation', async () => {
+  test('resolves and logs the cause when enableGoogleCloudTelemetry rejects', async () => {
     const err = new Error('no credentials');
     vi.mocked(enableGoogleCloudTelemetry).mockRejectedValueOnce(err);
-    enableTelemetryAtColdStart(() => true);
-    await runInit();
-    await new Promise((resolve) => setImmediate(resolve));
+    await expect(googleCloudTelemetryReady(() => true)()).resolves.toBe(
+      undefined,
+    );
+    await nextTick();
     expect(logger.error).toHaveBeenCalledWith(
-      'Agent kit could not enable Google Cloud telemetry.',
+      'Agent kit could not enable Google Cloud telemetry. Agent turns on this instance fail until it restarts.',
       err,
     );
+  });
+
+  test('rejects on every call and logs the cause when the module cannot load', async () => {
+    vi.resetModules();
+    vi.doMock('@genkit-ai/google-cloud', () => {
+      throw new Error('module missing');
+    });
+    try {
+      const ready = googleCloudTelemetryReady(() => true);
+      const first = ready();
+      await expect(first).rejects.toThrow();
+      expect(ready()).toBe(first);
+      expect(logger.error).toHaveBeenCalledOnce();
+      expect(logger.error).toHaveBeenCalledWith(
+        'Agent kit could not enable Google Cloud telemetry. Agent turns on this instance fail until it restarts.',
+        expect.anything(),
+      );
+    } finally {
+      vi.doUnmock('@genkit-ai/google-cloud');
+    }
+  });
+});
+
+describe('Genkit with a rejected telemetry setup', () => {
+  test('fails every flow run with the setup error', async () => {
+    const ai = genkit({});
+    const flow = ai.defineFlow(
+      { name: 'telemetryProbe', inputSchema: z.string() },
+      async (s) => `${s}!`,
+    );
+    const err = new Error('no credentials');
+    await expect(enableTelemetry(Promise.reject(err))).rejects.toBe(err);
+    await expect(flow('hi')).rejects.toBe(err);
+    await expect(flow('hi')).rejects.toBe(err);
   });
 });

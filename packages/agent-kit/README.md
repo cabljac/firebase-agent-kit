@@ -126,7 +126,7 @@ The kit declares these roles and APIs:
 | `monitoring.googleapis.com`     | Cloud Monitoring, for telemetry.                                             |
 | `logging.googleapis.com`        | Cloud Logging, for telemetry.                                                |
 
-Params cannot change the declared roles and APIs, so the telemetry ones are granted even when `GOOGLE_CLOUD_TELEMETRY` is off. They only allow writes of traces, metrics and logs.
+Params cannot change the declared roles and APIs, so the telemetry ones are granted even when `GOOGLE_CLOUD_TELEMETRY` is off. They only allow writes of traces, metrics and logs. `roles/logging.logWriter` allows writes to any log name in the project.
 
 Detached turns need no other IAM. In a kit, firebase-admin puts an ID token for the kit's service account in the `Authorization` header of each task, not an OIDC token, so Cloud Tasks does not check `iam.serviceAccounts.actAs`. Do not grant `roles/iam.serviceAccountUser`.
 
@@ -417,7 +417,10 @@ An empty list makes firebase-functions log a warning on every request, except in
 
 **`DETACHED_TURNS`** is experimental. With it on, the [configuration checks](#configuration-checks) also require `WORKER_TIMEOUT_SECONDS` to be a whole number from 60 to 1800 and `TIMEOUT_SECONDS` to be 60 or more (the turn route waits up to 40 seconds for the worker). The worker runs at most 10 detached turns of an instance at a time, with no per-user limit, so one user can fill the queue. See [Detached turns](https://github.com/cabljac/firebase-agent-kit/tree/main/packages/core#detached-turns-experimental) for how they work, and for their limits: a 30-minute cap, claims frozen at enqueue with a user check when the worker starts, no raw ID token in the worker, and App Check, `authorize` and the configuration checks only when the turn is sent. In a detached turn, a tool's `context.auth` has `uid` and `token` but no `rawToken`.
 
-**`GOOGLE_CLOUD_TELEMETRY`** calls `enableGoogleCloudTelemetry` from `@genkit-ai/google-cloud` once per instance, before the first request. It needs `roles/cloudtrace.agent`, `roles/monitoring.metricWriter` and `roles/logging.logWriter` (see [Required IAM](#required-iam)). The kit registers it with the firebase-functions `onInit` hook, so in an ES module wrapper do not call `onInit`: the last callback replaces the others. Telemetry is billed by Google Cloud Observability.
+**`GOOGLE_CLOUD_TELEMETRY`** calls `enableGoogleCloudTelemetry` from `@genkit-ai/google-cloud` once per instance. The first request to `agent` or `agentWorker` waits for the call. With the param off, the kit does not load `@genkit-ai/google-cloud`. Telemetry needs `roles/cloudtrace.agent`, `roles/monitoring.metricWriter` and `roles/logging.logWriter` (see [Required IAM](#required-iam)), and Google Cloud Observability bills for it.
+
+- **A failed setup fails turns.** When the setup fails (for example, no credentials), every agent turn on that instance fails until the instance restarts. If the module cannot load, every request fails. The kit logs `Agent kit could not enable Google Cloud telemetry.` with the cause.
+- **Do not enable telemetry twice.** With the param on, do not also call `enableGoogleCloudTelemetry()` in the wrapper or set `ENABLE_FIREBASE_MONITORING=true`.
 
 ### Configuration checks
 

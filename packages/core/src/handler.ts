@@ -304,6 +304,7 @@ export function createAgentApp<S>(
         if (!res.writableFinished) abort.abort();
       });
       try {
+        await opts.ready?.();
         const ctx = await contextProvider(toRequestData(req));
         if (!isRequestContext(ctx)) {
           throw new GenkitError({

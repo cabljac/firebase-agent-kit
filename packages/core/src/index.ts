@@ -17,4 +17,8 @@ export type {
   TurnLock,
   UserScopedStoreOptions,
 } from './types.js';
-export { type AgentTaskData, onAgentTask } from './worker.js';
+export {
+  type AgentTaskData,
+  type AgentTaskOptions,
+  onAgentTask,
+} from './worker.js';

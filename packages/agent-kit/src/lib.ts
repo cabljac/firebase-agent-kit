@@ -7,7 +7,7 @@ import {
 import type { ToolFn, ToolFnOptions, ToolRunOptions } from '@genkit-ai/ai/tool';
 import type { vertexAI } from '@genkit-ai/google-genai';
 import { fallback, retry, skills } from '@genkit-ai/middleware';
-import { logger, onInit } from 'firebase-functions';
+import { logger } from 'firebase-functions';
 import {
   type GenerateMiddleware,
   GenkitError,
@@ -635,23 +635,43 @@ export function checkAtColdStart(check: () => Promise<void>): void {
   });
 }
 
+const TELEMETRY_FAILED =
+  'Agent kit could not enable Google Cloud telemetry. Agent turns on this instance fail until it restarts.';
+
+async function enableTelemetry(enabled: () => boolean): Promise<void> {
+  if (!enabled()) return;
+  try {
+    const { enableGoogleCloudTelemetry } = await import(
+      '@genkit-ai/google-cloud'
+    );
+    // Genkit keeps this promise and every span awaits it, so a rejection fails each turn.
+    enableGoogleCloudTelemetry().catch((err: unknown) =>
+      logger.error(TELEMETRY_FAILED, err),
+    );
+  } catch (err) {
+    logger.error(TELEMETRY_FAILED, err);
+    throw err;
+  }
+}
+
 /**
- * Calls `enableGoogleCloudTelemetry` once when `enabled()` returns `true`, so
- * Genkit exports traces, metrics and logs to Google Cloud. It loads
- * `@genkit-ai/google-cloud` only then, and holds the first invocation of each
- * function until the call is made. It does nothing during deploy discovery.
- * Never throws.
+ * Returns a `ready` hook for `onAgentRequest` and `onAgentTask`. On its
+ * first call, it reads `enabled()`. When that is `true`, it imports
+ * `@genkit-ai/google-cloud` and calls `enableGoogleCloudTelemetry` once, so
+ * Genkit exports traces, metrics and logs to Google Cloud. When it is
+ * `false`, it imports nothing. Every later call returns the same promise.
+ *
+ * Setup fails closed: a failed import rejects the hook, and a rejected
+ * `enableGoogleCloudTelemetry` makes Genkit fail every span. Both are logged.
  */
-export function enableTelemetryAtColdStart(enabled: () => boolean): void {
-  if (process.env.FUNCTIONS_CONTROL_API === 'true' || !enabled()) return;
-  const report = (err: unknown) =>
-    logger.error('Agent kit could not enable Google Cloud telemetry.', err);
-  const ready = import('@genkit-ai/google-cloud')
-    .then(({ enableGoogleCloudTelemetry }) => {
-      enableGoogleCloudTelemetry().catch(report);
-    })
-    .catch(report);
-  onInit(() => ready);
+export function googleCloudTelemetryReady(
+  enabled: () => boolean,
+): () => Promise<void> {
+  let ready: Promise<void> | undefined;
+  return () => {
+    ready ??= enableTelemetry(enabled);
+    return ready;
+  };
 }
 
 type VertexAIOptions = NonNullable<Parameters<typeof vertexAI>[0]>;

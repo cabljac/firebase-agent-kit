@@ -20,7 +20,7 @@ import {
   checkAtColdStart,
   createKitGenkit,
   createPromptCheck,
-  enableTelemetryAtColdStart,
+  googleCloudTelemetryReady,
   type KitGenkit,
   kitMiddlewarePlugins,
   withLazyLocation,
@@ -165,7 +165,9 @@ const googleCloudTelemetry = defineBoolean('GOOGLE_CLOUD_TELEMETRY', {
 const instanceId = process.env.FIREBASE_KIT_INSTANCE_ID ?? 'default';
 
 if (getApps().length === 0) initializeApp();
-enableTelemetryAtColdStart(() => googleCloudTelemetry.value());
+const telemetryReady = googleCloudTelemetryReady(() =>
+  googleCloudTelemetry.value(),
+);
 
 const instance = genkit({
   plugins: [
@@ -223,6 +225,7 @@ export const agent = onAgentRequest(kitAgent, {
   enforceAppCheck,
   authorize: promptCheck,
   detach,
+  ready: telemetryReady,
 });
 
 /**
@@ -232,4 +235,5 @@ export const agent = onAgentRequest(kitAgent, {
 export const agentWorker = onAgentTask(kitAgent, detach, {
   memory,
   rateLimits: { maxConcurrentDispatches: 10 },
+  ready: telemetryReady,
 });

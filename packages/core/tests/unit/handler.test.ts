@@ -61,6 +61,7 @@ async function setup(
     withoutRawToken?: boolean;
     authorize?: AgentRequestOptions['authorize'];
     beforeTurn?: AgentRequestOptions['beforeTurn'];
+    ready?: AgentRequestOptions['ready'];
     store?: SessionStore;
   } = {},
 ) {
@@ -86,6 +87,7 @@ async function setup(
       lock: opts.lock,
       authorize: opts.authorize,
       beforeTurn: opts.beforeTurn,
+      ready: opts.ready,
       httpsOptions:
         opts.timeoutSeconds === undefined
           ? undefined
@@ -338,6 +340,59 @@ describe('createAgentApp', () => {
       message:
         'Detached turns are not enabled for this agent. Pass the detach option to onAgentRequest.',
     });
+    expect(acquired).toHaveLength(0);
+  });
+
+  test('waits for ready before it authenticates or runs a turn', async () => {
+    let resolveReady = () => {};
+    const ready = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveReady = resolve;
+        }),
+    );
+    const authorize = vi.fn();
+    const { lock, acquired } = fakeLock();
+    const { post } = await setup({ ready, authorize, lock });
+    const pending = post('/', { data: turn(), init: { sessionId: 's1' } });
+    await vi.waitFor(() => expect(ready).toHaveBeenCalledOnce());
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(authorize).not.toHaveBeenCalled();
+    expect(acquired).toHaveLength(0);
+    resolveReady();
+    const res = await pending;
+    expect(res.status).toBe(200);
+    expect(authorize).toHaveBeenCalledOnce();
+    expect(acquired).toHaveLength(1);
+  });
+
+  test('awaits ready on every route', async () => {
+    const ready = vi.fn(async () => {});
+    const { lock } = fakeLock();
+    const { post } = await setup({ ready, lock });
+    for (const [path] of routes) {
+      await post(path, {
+        data: path === '/' ? turn() : { snapshotId: 'x' },
+        init: { sessionId: 's1' },
+      });
+    }
+    expect(ready).toHaveBeenCalledTimes(routes.length);
+  });
+
+  test('answers 500 INTERNAL and runs no turn when ready rejects', async () => {
+    const authorize = vi.fn();
+    const { lock, acquired } = fakeLock();
+    const { post } = await setup({
+      ready: async () => {
+        throw new Error('no credentials');
+      },
+      authorize,
+      lock,
+    });
+    const res = await post('/', { data: turn(), init: { sessionId: 's1' } });
+    expect(res.status).toBe(500);
+    expect(await res.json()).toMatchObject({ status: 'INTERNAL' });
+    expect(authorize).not.toHaveBeenCalled();
     expect(acquired).toHaveLength(0);
   });
 
