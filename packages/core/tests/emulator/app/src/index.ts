@@ -92,3 +92,75 @@ const scopedAgent = (scope: string) =>
 
 export const alphaAgent = scopedAgent('alpha');
 export const betaAgent = scopedAgent('beta');
+
+const deleteFile = ai.defineTool(
+  {
+    name: 'deleteFile',
+    description: 'Delete a file after the user approves.',
+    inputSchema: z.object({ path: z.string() }),
+    outputSchema: z.object({
+      deleted: z.string().optional(),
+      declined: z.boolean().optional(),
+    }),
+  },
+  async ({ path }, { interrupt, resumed }) => {
+    if (!resumed) interrupt({ kind: 'approval', action: `delete ${path}` });
+    if (typeof resumed === 'object' && resumed.approved === true) {
+      return { deleted: path };
+    }
+    return { declined: true };
+  },
+);
+
+const pickColor = ai.defineInterrupt({
+  name: 'pickColor',
+  description: 'Ask the user to pick a colour.',
+  inputSchema: z.object({}),
+  outputSchema: z.string(),
+  requestMetadata: { kind: 'question' },
+});
+
+ai.defineModel({ name: 'test/approvals' }, async (request) => {
+  const last = request.messages[request.messages.length - 1];
+  const responses = last?.content.flatMap((part) =>
+    part.toolResponse ? [part.toolResponse] : [],
+  );
+  if (responses?.length) {
+    const outputs = Object.fromEntries(
+      responses.map((r) => [r.name, r.output]),
+    );
+    return {
+      finishReason: 'stop' as const,
+      message: {
+        role: 'model' as const,
+        content: [{ text: `results: ${JSON.stringify(outputs)}` }],
+      },
+    };
+  }
+  const text = last?.content.map((part) => part.text ?? '').join('') ?? '';
+  const requests = [
+    ...(/delete|both/.test(text)
+      ? [{ name: 'deleteFile', ref: 'del-1', input: { path: '/tmp/x' } }]
+      : []),
+    ...(/ask|both/.test(text)
+      ? [{ name: 'pickColor', ref: 'ask-1', input: {} }]
+      : []),
+  ];
+  return {
+    finishReason: 'stop' as const,
+    message: {
+      role: 'model' as const,
+      content: requests.map((toolRequest) => ({ toolRequest })),
+    },
+  };
+});
+
+export const approvalAgent = onAgentRequest(
+  ai.defineAgent({
+    name: 'approvalAgent',
+    model: 'test/approvals',
+    tools: [deleteFile, pickColor],
+    store: createUserScopedStore({ scope: 'approval' }),
+  }),
+  { httpsOptions: { timeoutSeconds: 60 } },
+);

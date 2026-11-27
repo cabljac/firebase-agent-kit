@@ -184,6 +184,51 @@ ai.defineInterrupt({
 });
 ```
 
+#### Restartable approvals
+
+An interrupt only asks. The prompt tells the model to ask before it acts, and the model can skip the question. To make the approval a rule of the code, put it in the tool that acts. The tool calls `interrupt({ kind: 'approval', ... })` on its first run. The client answers with a `restart` entry that sends `{ approved: true }` or `{ approved: false }` in the tool's `context.resumed`, and the tool runs again with the same input:
+
+```ts
+ai.defineTool(
+  {
+    name: 'issueRefund',
+    description: 'Refund an order. The user approves each refund.',
+    inputSchema: z.object({ orderId: z.string(), amount: z.number() }),
+    outputSchema: z.object({ refunded: z.boolean() }),
+  },
+  async ({ orderId, amount }, { context, interrupt, resumed }) => {
+    if (!resumed) {
+      interrupt({
+        kind: 'approval',
+        summary: `Refund ${amount} for ${orderId}`,
+      });
+    }
+    if (typeof resumed !== 'object' || resumed.approved !== true) {
+      return { refunded: false }; // declined
+    }
+    // ...refund the order of context.auth.uid
+    return { refunded: true };
+  },
+);
+```
+
+- The refund code runs only after an approval, whatever the model does.
+- `interrupt` throws, so the code after it runs only on a restart.
+- The client sends `context.resumed`, so the server does not verify it. The tool still checks `context.auth`, and it can check again what it is about to do.
+- A restart must send the original input. The server answers `INVALID_ARGUMENT` when the input differs.
+- `kind: 'approval'` is the convention that tells a client to restart the tool instead of answering it, for example [`fak`](https://github.com/cabljac/firebase-agent-kit/tree/main/packages/cli#readme). Genkit sends the `interrupt(...)` object to the client as `metadata.interrupt` of the tool request. Do not put `kind: 'approval'` in the `requestMetadata` of `ai.defineInterrupt`: an interrupt has no code to run again, so it asks again.
+
+A client that builds the restart itself must add `metadata.resumed`. Genkit's `interrupt.restart()` sends no metadata, so the tool sees no `context.resumed` and asks again. `response.interrupts` also drops the interrupt metadata, so a client that needs to detect `kind: 'approval'` reads `response.toolRequests[i].metadata.interrupt`:
+
+```ts
+const [approval] = response.interrupts;
+await chat.resume({
+  restart: [
+    { ...approval.restart(), metadata: { resumed: { approved: true } } },
+  ],
+});
+```
+
 ### Skills
 
 A skill is a set of instructions that the model loads only when it needs them. Put the skills of an instance in `skills/<instance id>/` in the function source directory. Each skill is a directory with a `SKILL.md` file:
@@ -447,7 +492,7 @@ For a browser client, set `CORS_ORIGINS` to your web origins and deploy again. S
 
 - Build data paths from `context.auth.uid`. Never build them from model output alone.
 - Keep tool input schemas narrow.
-- Use `ai.defineInterrupt` to get user approval before a tool writes or spends.
+- Get user approval before a tool writes or spends. A [restartable approval](#restartable-approvals) puts the check in the tool's code; `ai.defineInterrupt` relies on the prompt.
 - Keep the five collections the kit writes closed to client SDKs: `agent-kit-sessions`, `agent-kit-sessions-pointers`, `agent-kit-sessions-shards` (the message history), `agent-kit-locks` and `agent-kit-runs` (detached runs). Your Firestore rules must deny all client reads and writes there:
 
   ```

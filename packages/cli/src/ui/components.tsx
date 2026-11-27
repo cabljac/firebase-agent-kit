@@ -1,8 +1,10 @@
 import { Box, Text, useInput } from 'ink';
 import { type ReactNode, useEffect, useState } from 'react';
-import type { PendingInterrupt } from '../chat.js';
+import { isRestartableApproval, type PendingInterrupt } from '../chat.js';
 import type { Problem } from '../errors.js';
 import {
+  answerError,
+  approvalDetails,
   approvalOutput,
   formatJson,
   helpLines,
@@ -237,7 +239,8 @@ export interface InterruptCardProps {
 
 /**
  * Asks the user to answer an interrupt: approve, deny, or type a JSON
- * response for tools whose output is not an approval.
+ * response for tools whose output is not an approval. For a restartable
+ * approval, the answer runs the tool again instead of replacing its output.
  */
 export function InterruptCard({
   interrupt,
@@ -248,6 +251,8 @@ export function InterruptCard({
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
   const [error, setError] = useState<string>();
+  const restartable = isRestartableApproval(interrupt);
+  const details = approvalDetails(interrupt);
 
   useInput((input, key) => {
     if (editing) {
@@ -265,8 +270,11 @@ export function InterruptCard({
 
   const submit = (text: string) => {
     const parsed = parseJsonInput(text);
-    if (parsed.ok) onAnswer(parsed.value);
-    else setError(parsed.error);
+    const invalid = parsed.ok
+      ? answerError(interrupt, parsed.value)
+      : parsed.error;
+    if (invalid !== undefined) setError(invalid);
+    else if (parsed.ok) onAnswer(parsed.value);
   };
 
   return (
@@ -291,6 +299,14 @@ export function InterruptCard({
         <Text dimColor>tool</Text>
         <Text bold>{interrupt.name}</Text>
       </Box>
+      {details && (
+        <Box flexDirection="column">
+          <Text dimColor>request</Text>
+          <Box paddingLeft={2}>
+            <Text>{formatJson(details)}</Text>
+          </Box>
+        </Box>
+      )}
       {interrupt.input !== undefined && (
         <Box flexDirection="column">
           <Text dimColor>input</Text>
@@ -311,13 +327,21 @@ export function InterruptCard({
                   setError(undefined);
                 }}
                 onSubmit={submit}
-                placeholder='{"approved": true}'
+                placeholder={
+                  restartable
+                    ? '{"approved": false, "reason": "..."}'
+                    : '{"approved": true}'
+                }
               />
             </Box>
             {error ? (
               <Text color={theme.error}>{error}</Text>
             ) : (
-              <Text dimColor>Enter sends this JSON. Esc goes back.</Text>
+              <Text dimColor>
+                {restartable
+                  ? 'Enter runs the tool again with this JSON object. Esc goes back.'
+                  : 'Enter sends this JSON. Esc goes back.'}
+              </Text>
             )}
           </>
         ) : (
@@ -325,18 +349,26 @@ export function InterruptCard({
             <KeyRow>
               <Key k="a" label="Approve" />
               <Key k="d" label="Deny" />
-              <Key k="e" label="Respond with JSON" />
+              <Key
+                k="e"
+                label={restartable ? 'Answer with JSON' : 'Respond with JSON'}
+              />
               <Key k="esc" label="Later" />
             </KeyRow>
-            <Text dimColor>
-              Approve sends {JSON.stringify(approvalOutput(true))}, deny sends{' '}
-              {JSON.stringify(approvalOutput(false))}.
-            </Text>
+            <Text dimColor>{choiceHint(restartable)}</Text>
           </>
         )}
       </Box>
     </Box>
   );
+}
+
+function choiceHint(restartable: boolean): string {
+  const yes = JSON.stringify(approvalOutput(true));
+  const no = JSON.stringify(approvalOutput(false));
+  return restartable
+    ? `The tool runs again with your answer. Approve passes ${yes}, deny passes ${no}.`
+    : `Approve sends ${yes}, deny sends ${no}.`;
 }
 
 /** Props for {@link StatusBar}. */
