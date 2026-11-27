@@ -61,7 +61,7 @@ firebase functions:kits:install --package @cabljac/firebase-agent-kit
 
 firebase-tools asks for an instance name (for example `support`), a region and the params. It installs the kit in `function-kits/firebase-agent-kit/source` and adds a kit stanza to `firebase.json`. See [Install](packages/agent-kit/README.md#install) for the non-interactive flags and for a manual install.
 
-For a full project with two instances, tools, skills and an approval interrupt, see [examples/](examples/README.md).
+For a full project that shows most features, see the [game master example](examples/README.md): two text adventure instances with per-user tools, server-side dice, a restartable approval, skills, retry and fallback, session resume and a detached turn.
 
 ## Customise
 
