@@ -7,8 +7,12 @@ import { lockKey, userKey } from '../../src/keys.js';
 
 /** The demo project of the detach suite. */
 export const PROJECT = 'demo-detach';
-/** Base URL of the functions in the emulator. */
-export const BASE = `http://127.0.0.1:5101/${PROJECT}/us-central1`;
+/** Base URL of the functions in `region` in the emulator. */
+export function baseUrl(region = 'us-central1') {
+  return `http://127.0.0.1:5101/${PROJECT}/${region}`;
+}
+/** Base URL of the functions in the default region in the emulator. */
+export const BASE = baseUrl();
 const SIGN_UP =
   'http://127.0.0.1:9109/identitytoolkit.googleapis.com/v1/accounts:signUp?key=fake';
 
@@ -36,10 +40,10 @@ export async function signUp(): Promise<{ uid: string; idToken: string }> {
   return { uid: json.localId, idToken: json.idToken };
 }
 
-/** The stock client for the function `name`. */
-export function client(idToken: string, name = 'detachAgent') {
+/** The stock client for the function `name` in `region`. */
+export function client(idToken: string, name = 'detachAgent', region?: string) {
   return remoteAgent({
-    url: `${BASE}/${name}`,
+    url: `${baseUrl(region)}/${name}`,
     headers: { Authorization: `Bearer ${idToken}` },
   });
 }
@@ -53,9 +57,10 @@ export function postDetach(
     init?: Record<string, unknown>;
     accept?: string;
     signal?: AbortSignal;
+    region?: string;
   } = {},
 ) {
-  return fetch(`${BASE}/${opts.name ?? 'detachAgent'}`, {
+  return fetch(`${baseUrl(opts.region)}/${opts.name ?? 'detachAgent'}`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',

@@ -82,8 +82,15 @@ function toSeconds(timeout: HttpsOptions['timeoutSeconds']): number {
     : DEFAULT_TIMEOUT_SECONDS;
 }
 
-function resolveRegion(region: unknown): string | undefined {
-  const value = region instanceof Expression ? region.value() : region;
+/**
+ * Returns the runtime region of a function from its `__endpoint.region`, or
+ * `undefined` when it has none (the default region). Call it at request time:
+ * a params expression only has a value then.
+ */
+export function endpointRegion(region: unknown): string | undefined {
+  // Typed string[], but a param, an expression or a ResetValue passes through as is.
+  const first: unknown = Array.isArray(region) ? region[0] : region;
+  const value = first instanceof Expression ? first.value() : first;
   return typeof value === 'string' && value ? value : undefined;
 }
 
@@ -372,7 +379,7 @@ export function onAgentRequest<S>(
     createAgentApp(agent, opts, {
       // The deployed value: httpsOptions merged over setGlobalOptions.
       timeoutSeconds: () => fn.__endpoint.timeoutSeconds,
-      region: () => resolveRegion(fn.__endpoint.region?.[0]),
+      region: () => endpointRegion(fn.__endpoint.region),
     }),
   );
   return fn;
