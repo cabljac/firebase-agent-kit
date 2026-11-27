@@ -7,7 +7,7 @@ import {
 import type { ToolFn, ToolFnOptions, ToolRunOptions } from '@genkit-ai/ai/tool';
 import type { vertexAI } from '@genkit-ai/google-genai';
 import { fallback, retry, skills } from '@genkit-ai/middleware';
-import { logger } from 'firebase-functions';
+import { logger, onInit } from 'firebase-functions';
 import {
   type GenerateMiddleware,
   GenkitError,
@@ -633,6 +633,25 @@ export function checkAtColdStart(check: () => Promise<void>): void {
       logger.error('Agent kit configuration check failed at cold start.', err);
     });
   });
+}
+
+/**
+ * Calls `enableGoogleCloudTelemetry` once when `enabled()` returns `true`, so
+ * Genkit exports traces, metrics and logs to Google Cloud. It loads
+ * `@genkit-ai/google-cloud` only then, and holds the first invocation of each
+ * function until the call is made. It does nothing during deploy discovery.
+ * Never throws.
+ */
+export function enableTelemetryAtColdStart(enabled: () => boolean): void {
+  if (process.env.FUNCTIONS_CONTROL_API === 'true' || !enabled()) return;
+  const report = (err: unknown) =>
+    logger.error('Agent kit could not enable Google Cloud telemetry.', err);
+  const ready = import('@genkit-ai/google-cloud')
+    .then(({ enableGoogleCloudTelemetry }) => {
+      enableGoogleCloudTelemetry().catch(report);
+    })
+    .catch(report);
+  onInit(() => ready);
 }
 
 type VertexAIOptions = NonNullable<Parameters<typeof vertexAI>[0]>;

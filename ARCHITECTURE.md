@@ -272,7 +272,7 @@ For each kit instance, `firebase deploy` creates:
 
 The worker and its queue exist even with `DETACHED_TURNS=false`. Params cannot change which functions a kit exports. The worker then refuses every task.
 
-The first deploy of the kit also creates a managed `firebase-fn-*` service account and attaches it to every instance. The `requiresRole` and `requiresAPI` calls in `packages/agent-kit/src/index.ts` give it five project roles and enable three APIs. See [Required IAM](packages/agent-kit/README.md#required-iam) for the list and the reason for each.
+The first deploy of the kit also creates a managed `firebase-fn-*` service account and attaches it to every instance. The `requiresRole` and `requiresAPI` calls in `packages/agent-kit/src/index.ts` give it eight project roles and enable six APIs. See [Required IAM](packages/agent-kit/README.md#required-iam) for the list and the reason for each.
 
 The Firestore collections appear on first write: `agent-kit-sessions`, `agent-kit-sessions-pointers`, `agent-kit-sessions-shards`, `agent-kit-locks` and `agent-kit-runs`. All instances share them. The deploy sets no TTL policy. Before you turn on detached turns, set one on `expireAt` in `agent-kit-runs` (see [Deploy](packages/agent-kit/README.md#deploy)). The session and lock collections have no TTL field.
 
