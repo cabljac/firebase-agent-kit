@@ -4,6 +4,7 @@ import {
   type MessageData,
   remoteAgent,
   type SessionSnapshot,
+  type ToolRequestPart,
   type ToolResponsePart,
 } from 'genkit/beta/client';
 import type { TokenSource } from './auth.js';
@@ -14,12 +15,21 @@ export interface PendingInterrupt {
   name: string;
   ref?: string;
   input: unknown;
+  /** The object the tool passed to `interrupt(metadata)`, if any. */
+  metadata?: Record<string, unknown>;
 }
 
-/** What the user sends: a new message, or responses to interrupts. */
-export type TurnInput =
-  | { message: string }
-  | { respond: { interrupt: PendingInterrupt; output: unknown }[] };
+/**
+ * The user's answer to one interrupt. For a restartable approval, `output`
+ * becomes the tool's `context.resumed`; otherwise it is the tool output.
+ */
+export interface InterruptAnswer {
+  interrupt: PendingInterrupt;
+  output: unknown;
+}
+
+/** What the user sends: a new message, or answers to interrupts. */
+export type TurnInput = { message: string } | { answers: InterruptAnswer[] };
 
 /** How a turn ended. */
 export type TurnOutcome =
@@ -56,6 +66,29 @@ interface ToolRequestLike {
 
 const isInterrupt = (part: ToolRequestLike) => !!part.metadata?.interrupt;
 
+/**
+ * True when `value` is a JSON object: not null and not an array.
+ * @param value Any value.
+ */
+export const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+function toPending(part: ToolRequestLike): PendingInterrupt[] {
+  if (!part.toolRequest) return [];
+  const { name, ref, input } = part.toolRequest;
+  const metadata = part.metadata?.interrupt;
+  return [{ name, ref, input, ...(isRecord(metadata) && { metadata }) }];
+}
+
+/**
+ * True when `interrupt` is a restartable approval: a tool called
+ * `interrupt({ kind: 'approval', ... })` and runs again when the client
+ * restarts it with `{ approved }` in `context.resumed`.
+ * @param interrupt The pending interrupt.
+ */
+export const isRestartableApproval = (interrupt: PendingInterrupt) =>
+  interrupt.metadata?.kind === 'approval';
+
 const unsettled = (status: SessionSnapshot['status']) =>
   status === 'pending' || status === 'aborting' || status === 'expired';
 
@@ -74,6 +107,56 @@ export function respondPart(
       ...(interrupt.ref !== undefined && { ref: interrupt.ref }),
       output,
     },
+  };
+}
+
+/**
+ * Builds the resume part that runs the interrupted tool again with
+ * `resumed` in its `context.resumed`. The input must stay as it was: the
+ * server rejects a restart whose input differs from the original request.
+ * @param interrupt The pending interrupt.
+ * @param resumed What the tool reads from `context.resumed`.
+ */
+export function restartPart(
+  interrupt: PendingInterrupt,
+  resumed: Record<string, unknown>,
+): ToolRequestPart {
+  return {
+    toolRequest: {
+      name: interrupt.name,
+      ...(interrupt.ref !== undefined && { ref: interrupt.ref }),
+      input: interrupt.input,
+    },
+    metadata: { resumed },
+  };
+}
+
+/**
+ * Builds the `resume` payload for `answers`: a `restart` entry for each
+ * restartable approval and a `respond` entry for every other interrupt.
+ * Throws when the answer to a restartable approval is not a JSON object.
+ * @param answers The user's answers, one per pending interrupt.
+ */
+export function resumePayload(answers: InterruptAnswer[]): {
+  respond?: ToolResponsePart[];
+  restart?: ToolRequestPart[];
+} {
+  const respond: ToolResponsePart[] = [];
+  const restart: ToolRequestPart[] = [];
+  for (const { interrupt, output } of answers) {
+    if (!isRestartableApproval(interrupt)) {
+      respond.push(respondPart(interrupt, output));
+    } else if (isRecord(output)) {
+      restart.push(restartPart(interrupt, output));
+    } else {
+      throw new Error(
+        `The answer to the approval ${interrupt.name} must be a JSON object.`,
+      );
+    }
+  }
+  return {
+    ...(respond.length > 0 && { respond }),
+    ...(restart.length > 0 && { restart }),
   };
 }
 
@@ -112,17 +195,7 @@ export function historyEntries(messages: MessageData[]): HistoryEntry[] {
 export function pendingInterrupts(messages: MessageData[]): PendingInterrupt[] {
   const last = messages[messages.length - 1];
   if (last?.role !== 'model') return [];
-  return last.content.filter(isInterrupt).flatMap((p) =>
-    p.toolRequest
-      ? [
-          {
-            name: p.toolRequest.name,
-            ref: p.toolRequest.ref,
-            input: p.toolRequest.input,
-          },
-        ]
-      : [],
-  );
+  return last.content.filter(isInterrupt).flatMap(toPending);
 }
 
 /** Loading a session failed; `cause` holds the client error. */
@@ -359,7 +432,7 @@ export class ChatCore implements ChatSession {
   /**
    * Runs one turn and streams it to `handlers`. Rejects with the client error
    * when the turn fails; see `explain` in `errors.ts`.
-   * @param input A message, or responses to pending interrupts.
+   * @param input A message, or answers to pending interrupts.
    * @param handlers Streaming callbacks and an abort signal.
    */
   async runTurn(
@@ -370,13 +443,7 @@ export class ChatCore implements ChatSession {
     const turn = this.chat.sendStream(
       'message' in input
         ? input.message
-        : {
-            resume: {
-              respond: input.respond.map((r) =>
-                respondPart(r.interrupt, r.output),
-              ),
-            },
-          },
+        : { resume: resumePayload(input.answers) },
       { abortSignal: handlers.signal },
     );
     let text = '';
@@ -397,11 +464,9 @@ export class ChatCore implements ChatSession {
     }
     const response = await turn.response;
     await this.remember();
-    const interrupts = response.interrupts.map(({ name, ref, input }) => ({
-      name,
-      ref,
-      input,
-    }));
+    const interrupts = response.toolRequests
+      .filter(isInterrupt)
+      .flatMap(toPending);
     const tools = requested
       .filter(
         (t) => !interrupts.some((i) => i.name === t.name && i.ref === t.ref),

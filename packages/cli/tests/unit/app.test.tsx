@@ -62,7 +62,7 @@ test('pressing a twice answers the interrupt once', async () => {
   await frames.until(() => expect(app.text()).toContain('sent'));
   expect(session.turns).toHaveLength(2);
   expect(session.turns[1]).toEqual({
-    respond: [
+    answers: [
       {
         interrupt: { name: 'approveTransfer', ref: 'r1', input: { amount: 5 } },
         output: { approved: true },

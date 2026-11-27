@@ -175,6 +175,63 @@ test('InterruptCard key hints keep each key with its label at 34 columns', () =>
   expect(text).not.toMatch(/\[e\]\s*\n/);
 });
 
+const approval = {
+  name: 'deleteFile',
+  ref: 'd1',
+  input: { path: '/tmp/x' },
+  metadata: { kind: 'approval', action: 'delete /tmp/x' },
+};
+
+test('InterruptCard shows a restartable approval with its request', () => {
+  const { lastFrame } = mount(
+    <InterruptCard
+      interrupt={approval}
+      position={{ index: 0, total: 1 }}
+      onAnswer={vi.fn()}
+      onLeave={vi.fn()}
+    />,
+  );
+  const frame = lastFrame() ?? '';
+  expect(frame).toContain('Approval needed');
+  expect(frame).toContain('tool deleteFile');
+  expect(frame).toContain('"action": "delete /tmp/x"');
+  expect(frame).not.toContain('"kind"');
+  expect(frame).toContain('"path": "/tmp/x"');
+  expect(frame).toContain('The tool runs again with your answer.');
+  expect(frame).toContain('[e] Answer with JSON');
+});
+
+test('InterruptCard takes only a JSON object for a restartable approval', async () => {
+  const onAnswer = vi.fn();
+  const { stdin, lastFrame } = mount(
+    <InterruptCard
+      interrupt={approval}
+      position={{ index: 0, total: 1 }}
+      onAnswer={onAnswer}
+      onLeave={vi.fn()}
+    />,
+  );
+  await tick();
+  stdin.write('e');
+  await tick();
+  stdin.write('true');
+  await tick();
+  stdin.write('\r');
+  await tick();
+  expect(lastFrame()).toContain('This approval takes a JSON object');
+  expect(onAnswer).not.toHaveBeenCalled();
+
+  for (let i = 0; i < 4; i++) {
+    stdin.write('\x7f');
+    await tick();
+  }
+  stdin.write('{"approved":false,"reason":"no"}');
+  await tick();
+  stdin.write('\r');
+  await tick();
+  expect(onAnswer).toHaveBeenCalledWith({ approved: false, reason: 'no' });
+});
+
 test('PasswordPrompt submits the typed password and hides it', async () => {
   const onSubmit = vi.fn();
   const { stdin, lastFrame } = mount(

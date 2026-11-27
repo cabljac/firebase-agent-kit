@@ -103,6 +103,76 @@ test('counts tool calls from model chunks only, and leaves out interrupts', asyn
   });
 });
 
+test('reads interrupt metadata and resumes with restart and respond together', async () => {
+  const approval = {
+    toolRequest: { name: 'deleteFile', ref: 'd1', input: { path: '/x' } },
+    metadata: { interrupt: { kind: 'approval', action: 'delete /x' } },
+  };
+  const plain = {
+    toolRequest: { name: 'approveTransfer', ref: 't1', input: {} },
+    metadata: { interrupt: true },
+  };
+  const inputs: AgentInput[] = [];
+  const outputs: Awaited<ReturnType<AgentTransport['runTurn']>['output']>[] = [
+    {
+      finishReason: 'interrupted',
+      sessionId: 's1',
+      message: { role: 'model', content: [approval, plain] },
+    },
+    { finishReason: 'stop', sessionId: 's1' },
+  ];
+  const chat = core({
+    runTurn: (input) => {
+      inputs.push(input);
+      const output = outputs[inputs.length - 1];
+      if (!output) throw new Error('unexpected turn');
+      return {
+        stream: (async function* () {})(),
+        output: Promise.resolve(output),
+      };
+    },
+    getSnapshot: async () => undefined,
+    abort: async () => undefined,
+  });
+  const paused = await chat.runTurn({ message: 'clean up' });
+  if (paused.status !== 'interrupted') throw new Error('not interrupted');
+  const [deleteFile, transfer] = paused.interrupts;
+  expect(paused.interrupts).toEqual([
+    {
+      name: 'deleteFile',
+      ref: 'd1',
+      input: { path: '/x' },
+      metadata: { kind: 'approval', action: 'delete /x' },
+    },
+    { name: 'approveTransfer', ref: 't1', input: {} },
+  ]);
+  if (!deleteFile || !transfer) throw new Error('missing interrupts');
+
+  await chat.runTurn({
+    answers: [
+      { interrupt: deleteFile, output: { approved: true } },
+      { interrupt: transfer, output: { approved: false } },
+    ],
+  });
+  expect(inputs[1]?.resume).toEqual({
+    restart: [
+      {
+        toolRequest: { name: 'deleteFile', ref: 'd1', input: { path: '/x' } },
+        metadata: { resumed: { approved: true } },
+      },
+    ],
+    respond: [
+      {
+        toolResponse: {
+          name: 'approveTransfer',
+          ref: 't1',
+          output: { approved: false },
+        },
+      },
+    ],
+  });
+});
+
 /** A server holding `snapshots`, whose detached turns land as `settled`. */
 function detachServer(
   snapshots: Record<string, SessionSnapshot>,

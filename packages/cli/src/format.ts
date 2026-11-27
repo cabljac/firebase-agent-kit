@@ -1,3 +1,9 @@
+import {
+  isRecord,
+  isRestartableApproval,
+  type PendingInterrupt,
+} from './chat.js';
+
 /** What a line typed in the chat means. */
 export type Command =
   | { name: 'message'; text: string }
@@ -124,6 +130,36 @@ export function parseJsonInput(
 
 /** Output sent by the approve and deny choices of an interrupt card. */
 export const approvalOutput = (approved: boolean) => ({ approved });
+
+/**
+ * Returns why `value` cannot answer `interrupt`, or undefined when it can.
+ * A restartable approval takes a JSON object: the tool reads it from
+ * `context.resumed`, and a value that is not an object would make the tool
+ * ask again.
+ * @param interrupt The pending interrupt.
+ * @param value The parsed JSON the user typed.
+ */
+export function answerError(
+  interrupt: PendingInterrupt,
+  value: unknown,
+): string | undefined {
+  if (!isRestartableApproval(interrupt) || isRecord(value)) return undefined;
+  return 'This approval takes a JSON object, for example {"approved": false, "reason": "..."}.';
+}
+
+/**
+ * Returns what a restartable approval says about itself: its interrupt
+ * metadata without `kind`. Undefined for other interrupts, or when nothing
+ * is left.
+ * @param interrupt The pending interrupt.
+ */
+export function approvalDetails(
+  interrupt: PendingInterrupt,
+): Record<string, unknown> | undefined {
+  if (!isRestartableApproval(interrupt) || !interrupt.metadata) return;
+  const { kind: _kind, ...details } = interrupt.metadata;
+  return Object.keys(details).length ? details : undefined;
+}
 
 /**
  * Describes how the user answered an interrupt, for the scrollback.

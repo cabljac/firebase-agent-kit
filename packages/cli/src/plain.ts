@@ -1,13 +1,17 @@
 import { createInterface } from 'node:readline';
 import type { Readable, Writable } from 'node:stream';
-import type {
-  ChatSession,
-  DetachedOutcome,
-  PendingInterrupt,
-  TurnInput,
+import {
+  type ChatSession,
+  type DetachedOutcome,
+  type InterruptAnswer,
+  isRestartableApproval,
+  type PendingInterrupt,
+  type TurnInput,
 } from './chat.js';
 import { explain, type Problem } from './errors.js';
 import {
+  answerError,
+  approvalDetails,
   approvalOutput,
   describeAnswer,
   describeDetached,
@@ -46,8 +50,9 @@ export function problemLines(problem: Problem): string[] {
 /**
  * Runs the chat without a TUI, for piped input or output. Each input line is
  * a message or a command. An interrupt reads its answer from the next line:
- * `approve`, `deny`, or a JSON value. After a 409, `retry` reloads the
- * session and sends the last input again. Problems go to `errors`.
+ * `approve`, `deny`, or a JSON value (a JSON object for a restartable
+ * approval). After a 409, `retry` reloads the session and sends the last
+ * input again. Problems go to `errors`.
  * @param opts See {@link PlainOptions}.
  * @returns 0 when every turn and load succeeded, otherwise 1.
  */
@@ -65,7 +70,7 @@ export async function runPlain(opts: PlainOptions): Promise<number> {
   // Created before the first await: readline drops lines read before then.
   const queue = lines[Symbol.asyncIterator]();
   let pending: PendingInterrupt[] = [];
-  let answers: { interrupt: PendingInterrupt; output: unknown }[] = [];
+  let answers: InterruptAnswer[] = [];
   let retry: TurnInput | { detach: string } | undefined;
   let shownSession: string | undefined;
 
@@ -73,8 +78,17 @@ export async function runPlain(opts: PlainOptions): Promise<number> {
     const next = pending[0];
     if (!next) return;
     write(`approval needed: ${next.name}`);
+    const details = approvalDetails(next);
+    if (details) {
+      write('  request:');
+      for (const line of formatJson(details).split('\n')) write(`    ${line}`);
+    }
     for (const line of formatJson(next.input).split('\n')) write(`  ${line}`);
-    write('  answer with: approve | deny | <JSON>');
+    write(
+      isRestartableApproval(next)
+        ? '  the tool runs again with your answer: approve | deny | <JSON object>'
+        : '  answer with: approve | deny | <JSON>',
+    );
   };
 
   const run = async (input: TurnInput) => {
@@ -193,8 +207,11 @@ export async function runPlain(opts: PlainOptions): Promise<number> {
       else if (line === 'deny') answer = approvalOutput(false);
       else {
         const parsed = parseJsonInput(line);
-        if (!parsed.ok) {
-          opts.errors.write(`${parsed.error}\n`);
+        const invalid = parsed.ok
+          ? answerError(current, parsed.value)
+          : undefined;
+        if (!parsed.ok || invalid !== undefined) {
+          opts.errors.write(`${parsed.ok ? invalid : parsed.error}\n`);
           continue;
         }
         answer = parsed.value;
@@ -203,7 +220,7 @@ export async function runPlain(opts: PlainOptions): Promise<number> {
       answers.push({ interrupt: current, output: answer });
       pending = pending.slice(1);
       if (pending.length) askNext();
-      else await run({ respond: answers });
+      else await run({ answers });
       continue;
     }
     if (line === 'retry' && retry) {

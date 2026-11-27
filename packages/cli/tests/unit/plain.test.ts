@@ -51,7 +51,7 @@ test.each([
   const { out } = await runLines(session, ['pay', answer]);
   expect(out).toContain('approval needed: approveTransfer');
   expect(session.turns[1]).toEqual({
-    respond: [
+    answers: [
       {
         interrupt: { name: 'approveTransfer', ref: 'r1', input: { amount: 5 } },
         output,
@@ -65,6 +65,28 @@ test('rejects an answer that is not JSON and keeps waiting', async () => {
   const { err } = await runLines(session, ['pay', 'yes please', 'approve']);
   expect(err).toContain('Not valid JSON');
   expect(session.turns).toHaveLength(2);
+});
+
+test('asks for a restartable approval and takes only a JSON object', async () => {
+  const approval = {
+    name: 'deleteFile',
+    ref: 'd1',
+    input: { path: '/tmp/x' },
+    metadata: { kind: 'approval', action: 'delete /tmp/x' },
+  };
+  const session = new FakeSession(async (input) =>
+    'message' in input
+      ? { status: 'interrupted', text: '', tools: [], interrupts: [approval] }
+      : done('ok'),
+  );
+  const { out, err } = await runLines(session, ['clean', '"yes"', 'deny']);
+  expect(out).toContain('approval needed: deleteFile');
+  expect(out).toContain('"action": "delete /tmp/x"');
+  expect(out).toContain('the tool runs again with your answer');
+  expect(err).toContain('This approval takes a JSON object');
+  expect(session.turns[1]).toEqual({
+    answers: [{ interrupt: approval, output: { approved: false } }],
+  });
 });
 
 test('writes a failed turn to stderr and exits 1', async () => {

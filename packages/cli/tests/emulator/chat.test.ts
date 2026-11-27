@@ -116,7 +116,7 @@ test('stops on an interrupt and resumes with the approval', async () => {
   ]);
 
   const done = await chat.runTurn({
-    respond: [
+    answers: [
       { interrupt: firstOf(paused.interrupts), output: { approved: true } },
     ],
   });
@@ -146,7 +146,7 @@ test('resumes a session by id, with history and a pending interrupt', async () =
   ]);
 
   const answered = await second.runTurn({
-    respond: [{ interrupt: firstOf(pending), output: { approved: false } }],
+    answers: [{ interrupt: firstOf(pending), output: { approved: false } }],
   });
   expect(answered.text).toBe('transfer result: {"approved":false}');
   expect(await second.runTurn({ message: 'count' })).toMatchObject({
@@ -217,5 +217,78 @@ test('a local abort ends the turn, and the next turn reloads the session', async
   expect(await chat.runTurn({ message: 'count' })).toMatchObject({
     status: 'done',
     text: 'user messages: 3',
+  });
+});
+
+const approvals = () =>
+  new ChatCore({
+    url: 'http://127.0.0.1:5001/demo-test/us-central1/approvalAgent',
+    tokens,
+    store,
+  });
+const deleteApproval = {
+  name: 'deleteFile',
+  ref: 'del-1',
+  input: { path: '/tmp/x' },
+  metadata: { kind: 'approval', action: 'delete /tmp/x' },
+};
+const colorQuestion = {
+  name: 'pickColor',
+  ref: 'ask-1',
+  input: {},
+  metadata: { kind: 'question' },
+};
+
+test.each([
+  [{ approved: true }, '{"deleteFile":{"deleted":"/tmp/x"}}'],
+  [{ approved: false }, '{"deleteFile":{"declined":true}}'],
+])(
+  'restarts a restartable approval with %j, and the tool decides',
+  async (output, results) => {
+    const chat = approvals();
+    const paused = await chat.runTurn({ message: 'delete it' });
+    if (paused.status !== 'interrupted') throw new Error('not interrupted');
+    expect(paused.interrupts).toEqual([deleteApproval]);
+
+    const done = await chat.runTurn({
+      answers: [{ interrupt: firstOf(paused.interrupts), output }],
+    });
+    expect(done).toMatchObject({ status: 'done', text: `results: ${results}` });
+  },
+);
+
+test('answers a non-approval interrupt with respond', async () => {
+  const chat = approvals();
+  const paused = await chat.runTurn({ message: 'ask me' });
+  if (paused.status !== 'interrupted') throw new Error('not interrupted');
+  expect(paused.interrupts).toEqual([colorQuestion]);
+
+  const done = await chat.runTurn({
+    answers: [{ interrupt: firstOf(paused.interrupts), output: 'red' }],
+  });
+  expect(done).toMatchObject({ text: 'results: {"pickColor":"red"}' });
+});
+
+test('resumes a loaded session with a restart and a respond in one payload', async () => {
+  const first = approvals();
+  await first.runTurn({ message: 'both' });
+  const sessionId = first.sessionId;
+  if (!sessionId) throw new Error('no session id');
+
+  const second = approvals();
+  const { pending } = await second.loadSession(sessionId);
+  expect(pending).toEqual([deleteApproval, colorQuestion]);
+  const [approval, question] = pending;
+  if (!approval || !question) throw new Error('missing interrupts');
+
+  const done = await second.runTurn({
+    answers: [
+      { interrupt: approval, output: { approved: true } },
+      { interrupt: question, output: 'blue' },
+    ],
+  });
+  expect(done).toMatchObject({
+    status: 'done',
+    text: 'results: {"deleteFile":{"deleted":"/tmp/x"},"pickColor":"blue"}',
   });
 });

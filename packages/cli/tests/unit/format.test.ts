@@ -1,10 +1,15 @@
 import { expect, test } from 'vitest';
 import {
   historyEntries,
+  isRestartableApproval,
   pendingInterrupts,
   respondPart,
+  restartPart,
+  resumePayload,
 } from '../../src/chat.js';
 import {
+  answerError,
+  approvalDetails,
   describeAnswer,
   describeDetached,
   describeUrl,
@@ -188,4 +193,105 @@ test('respondPart answers an interrupt by name and ref', () => {
   expect(respondPart({ name: 'x', input: {} }, 1)).toEqual({
     toolResponse: { name: 'x', output: 1 },
   });
+});
+
+const approval = {
+  name: 'deleteFile',
+  ref: 'd1',
+  input: { path: '/tmp/x' },
+  metadata: { kind: 'approval', action: 'delete /tmp/x' },
+};
+const question = {
+  name: 'pickColor',
+  ref: 'q1',
+  input: {},
+  metadata: { kind: 'question' },
+};
+
+test('pendingInterrupts keeps the interrupt metadata only when it is an object', () => {
+  expect(
+    pendingInterrupts([
+      {
+        role: 'model',
+        content: [
+          {
+            toolRequest: { name: 'deleteFile', ref: 'd1', input: {} },
+            metadata: { interrupt: { kind: 'approval' } },
+          },
+          interruptPart('approveTransfer', 'r1', {}),
+        ],
+      },
+    ]),
+  ).toEqual([
+    {
+      name: 'deleteFile',
+      ref: 'd1',
+      input: {},
+      metadata: { kind: 'approval' },
+    },
+    { name: 'approveTransfer', ref: 'r1', input: {} },
+  ]);
+});
+
+test('isRestartableApproval needs kind approval in the interrupt metadata', () => {
+  expect(isRestartableApproval(approval)).toBe(true);
+  expect(isRestartableApproval(question)).toBe(false);
+  expect(isRestartableApproval({ name: 'x', input: {} })).toBe(false);
+});
+
+test('restartPart re-issues the tool request unchanged, with resumed metadata', () => {
+  expect(restartPart(approval, { approved: true })).toEqual({
+    toolRequest: { name: 'deleteFile', ref: 'd1', input: { path: '/tmp/x' } },
+    metadata: { resumed: { approved: true } },
+  });
+  expect(restartPart({ name: 'x', input: 1 }, { approved: false })).toEqual({
+    toolRequest: { name: 'x', input: 1 },
+    metadata: { resumed: { approved: false } },
+  });
+});
+
+test('resumePayload restarts approvals and responds to every other interrupt', () => {
+  expect(
+    resumePayload([
+      { interrupt: approval, output: { approved: false } },
+      { interrupt: question, output: 'red' },
+      {
+        interrupt: { name: 'approveTransfer', input: {} },
+        output: { approved: true },
+      },
+    ]),
+  ).toEqual({
+    restart: [restartPart(approval, { approved: false })],
+    respond: [
+      respondPart(question, 'red'),
+      respondPart({ name: 'approveTransfer', input: {} }, { approved: true }),
+    ],
+  });
+  expect(
+    resumePayload([{ interrupt: approval, output: { approved: true } }]),
+  ).toEqual({ restart: [restartPart(approval, { approved: true })] });
+});
+
+test('resumePayload refuses an approval answer that is not an object', () => {
+  expect(() => resumePayload([{ interrupt: approval, output: true }])).toThrow(
+    'The answer to the approval deleteFile must be a JSON object.',
+  );
+});
+
+test('answerError asks for an object only for restartable approvals', () => {
+  expect(answerError(approval, { approved: false, reason: 'no' })).toBe(
+    undefined,
+  );
+  expect(answerError(approval, true)).toMatch(/takes a JSON object/);
+  expect(answerError(approval, [1])).toMatch(/takes a JSON object/);
+  expect(answerError(approval, null)).toMatch(/takes a JSON object/);
+  expect(answerError(question, 'red')).toBe(undefined);
+});
+
+test('approvalDetails shows the approval metadata without kind', () => {
+  expect(approvalDetails(approval)).toEqual({ action: 'delete /tmp/x' });
+  expect(approvalDetails({ ...approval, metadata: { kind: 'approval' } })).toBe(
+    undefined,
+  );
+  expect(approvalDetails(question)).toBe(undefined);
 });

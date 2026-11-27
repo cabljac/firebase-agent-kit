@@ -4,6 +4,7 @@ import type {
   ChatSession,
   DetachedOutcome,
   HistoryEntry,
+  InterruptAnswer,
   PendingInterrupt,
   TurnInput,
 } from '../chat.js';
@@ -52,7 +53,7 @@ type Mode =
   | {
       name: 'interrupt';
       pending: PendingInterrupt[];
-      answers: { interrupt: PendingInterrupt; output: unknown }[];
+      answers: InterruptAnswer[];
     }
   | { name: 'busy'; retry: RetryInput };
 
@@ -382,7 +383,7 @@ export function App({
     if (rest.length) {
       setMode({ ...current, pending: rest, answers });
     } else {
-      void run({ respond: answers });
+      void run({ answers });
     }
   };
 
