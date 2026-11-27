@@ -1,7 +1,9 @@
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitest/config';
 
-const examples = fileURLToPath(new URL('examples/', import.meta.url));
+const examples = fileURLToPath(
+  new URL('examples/', import.meta.url),
+).replaceAll('\\', '/');
 const agentKit = fileURLToPath(new URL('packages/agent-kit/', import.meta.url));
 
 export default defineConfig({

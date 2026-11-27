@@ -146,7 +146,7 @@ test.each([
     const { code, out, err } = await runLines(session, ['/detach build it']);
     expect(code).toBe(1);
     expect(err).toContain(text);
-    expect(out).not.toContain('Detached turn');
+    expect(out).not.toContain(text);
   },
 );
 

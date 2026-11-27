@@ -90,6 +90,9 @@ i  functions: At the first deploy, the following APIs will be enabled in your pr
 - aiplatform.googleapis.com
 - cloudtasks.googleapis.com
 - firestore.googleapis.com
+- cloudtrace.googleapis.com
+- monitoring.googleapis.com
+- logging.googleapis.com
 i  functions: At the first deploy, the following roles will be granted to the kit service account:
 ...
 ⚠  functions: Please review the changes above. If you do not want them applied to your project, uninstall this kit before running firebase deploy.

@@ -54,7 +54,9 @@ export function problemLines(problem: Problem): string[] {
  * approval). After a 409, `retry` reloads the session and sends the last
  * input again. Problems go to `errors`.
  * @param opts See {@link PlainOptions}.
- * @returns 0 when every turn and load succeeded, otherwise 1.
+ * @returns 0 when every turn, load and detached turn succeeded, otherwise 1.
+ *   A detached turn that failed, was aborted, expired or stopped on an
+ *   interrupt the client cannot read counts as failed.
  */
 export async function runPlain(opts: PlainOptions): Promise<number> {
   const { core, output } = opts;
@@ -68,7 +70,10 @@ export async function runPlain(opts: PlainOptions): Promise<number> {
   };
   const showDetached = (outcome: Parameters<typeof describeDetached>[0]) => {
     const { tone, text } = describeDetached(outcome);
-    if (tone !== 'warning') return write(text);
+    if (tone !== 'warning') {
+      write(text);
+      return;
+    }
     failed = true;
     opts.errors.write(`${text}\n`);
   };
