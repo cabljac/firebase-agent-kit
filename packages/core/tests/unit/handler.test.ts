@@ -315,7 +315,11 @@ describe('createAgentApp', () => {
       init: { sessionId: 's1' },
     });
     expect(res.status).toBe(400);
-    expect(await res.json()).toMatchObject({ status: 'FAILED_PRECONDITION' });
+    expect(await res.json()).toMatchObject({
+      status: 'FAILED_PRECONDITION',
+      message:
+        'Detached turns are not enabled for this agent. Pass the detach option to onAgentRequest.',
+    });
     expect(acquired).toHaveLength(0);
   });
 

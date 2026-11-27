@@ -21,6 +21,7 @@ import {
   type DetachDeps,
   defaultDetachDeps,
   startDetachedTurn,
+  wantsStream,
 } from './detach.js';
 import { detachedTurnsConfig } from './detached-turns.js';
 import {
@@ -117,13 +118,6 @@ function validationErrors(err: GenkitError): unknown[] | undefined {
 }
 
 const STREAM_DELIMITER = '\n\n';
-
-function wantsStream(req: express.Request): boolean {
-  return (
-    req.get('Accept')?.toLowerCase().includes('text/event-stream') === true ||
-    req.query.stream === 'true'
-  );
-}
 
 function publicError(err: unknown): GenkitError {
   const errors = err instanceof GenkitError ? validationErrors(err) : undefined;
@@ -281,7 +275,7 @@ export function createAgentApp<S>(
           await opts.beforeTurn?.({ context: ctx, input, init });
           const detachDeps =
             input.detach && detach?.enabled() ? getDetachDeps() : undefined;
-          if (!detachDeps) assertNotDetach(input);
+          if (!detachDeps) assertNotDetach(input, detach !== undefined);
           let sessionId = await resolveSessionId(init, agent, ctx);
           if (opts.detach && detachDeps) {
             if (!sessionId && init?.snapshotId) {
