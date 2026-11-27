@@ -48,6 +48,7 @@ requiresAPI(
 requiresRole('roles/aiplatform.user');
 requiresRole('roles/datastore.user');
 requiresRole('roles/cloudtasks.enqueuer');
+requiresRole('roles/firebaseauth.viewer');
 requiresRole('roles/run.invoker');
 
 const corsOrigins = defineList('CORS_ORIGINS', {
@@ -175,6 +176,11 @@ const promptCheck = createPromptCheck({
   instanceId,
   knownTools: () => toolNames,
   booleanParams: [enforceAppCheck.name, detachedTurns.name],
+  detachedTurns: {
+    enabled: detachedTurns.name,
+    workerTimeoutSeconds: workerTimeoutSeconds.name,
+    turnTimeoutSeconds: timeoutSeconds.name,
+  },
 });
 checkAtColdStart(promptCheck);
 

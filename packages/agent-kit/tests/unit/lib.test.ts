@@ -403,6 +403,51 @@ describe('withLazyLocation', () => {
   );
 });
 
+describe('createPromptCheck detached turn params', () => {
+  const check = () => {
+    const { ai, definePrompt } = setup();
+    definePrompt('support', []);
+    return createPromptCheck({
+      registry: ai.registry,
+      instanceId: 'support',
+      knownTools: () => [],
+      detachedTurns: {
+        enabled: 'AGENT_TEST_DETACH',
+        workerTimeoutSeconds: 'AGENT_TEST_WORKER',
+        turnTimeoutSeconds: 'AGENT_TEST_TURN',
+      },
+    });
+  };
+
+  test.each([
+    ['off, with bad timeouts', 'false', '5', '5'],
+    ['on, with unset timeouts', 'true', undefined, undefined],
+    ['on, at the lower bounds', 'true', '60', '60'],
+    ['on, at the upper bound', 'true', '1800', '3600'],
+  ])('passes %s', async (_label, enabled, worker, turn) => {
+    vi.stubEnv('AGENT_TEST_DETACH', enabled);
+    vi.stubEnv('AGENT_TEST_WORKER', worker);
+    vi.stubEnv('AGENT_TEST_TURN', turn);
+    await expect(check()()).resolves.toBeUndefined();
+  });
+
+  test.each([
+    ['a worker timeout under 60', '59', '60', 'AGENT_TEST_WORKER: "59"'],
+    ['a worker timeout over 1800', '1801', '60', 'AGENT_TEST_WORKER: "1801"'],
+    ['a worker timeout that is not a number', 'ten', '60', 'AGENT_TEST_WORKER'],
+    ['a turn timeout under 60', '540', '30', 'AGENT_TEST_TURN: "30"'],
+  ])('fails closed on %s', async (_label, worker, turn, named) => {
+    vi.stubEnv('FUNCTIONS_EMULATOR', 'true');
+    vi.stubEnv('AGENT_TEST_DETACH', 'true');
+    vi.stubEnv('AGENT_TEST_WORKER', worker);
+    vi.stubEnv('AGENT_TEST_TURN', turn);
+    await expect(check()()).rejects.toMatchObject({
+      status: 'FAILED_PRECONDITION',
+      originalMessage: expect.stringContaining(named),
+    });
+  });
+});
+
 describe('createPromptCheck boolean params', () => {
   const checkFor = (booleanParams: string[]) => {
     const { ai, definePrompt } = setup();

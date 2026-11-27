@@ -1,7 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { expressHandler } from '@genkit-ai/express';
 import {
-  type FirebaseContext,
   firebaseContext,
   setDebugSkipTokenVerification,
 } from '@genkit-ai/firebase/context';
@@ -22,6 +21,7 @@ import {
   defaultDetachDeps,
   startDetachedTurn,
 } from './detach.js';
+import { detachedTurnsConfig } from './detached-turns.js';
 import {
   assertNotDetach,
   isRequestContext,
@@ -42,7 +42,7 @@ import type {
 /** Test seams for {@link createAgentApp}. */
 export interface AgentAppDeps {
   /** Replaces the Firebase auth context provider. */
-  contextProvider?: ContextProvider<FirebaseContext>;
+  contextProvider?: ContextProvider;
   /** Returns the function's `timeoutSeconds`. Defaults to `opts.httpsOptions?.timeoutSeconds`. */
   timeoutSeconds?: () => HttpsOptions['timeoutSeconds'];
   /** Returns the function's region, which is also the worker's. */
@@ -121,7 +121,7 @@ export function createAgentApp<S>(
   opts: AgentRequestOptions<S> = {},
   deps: AgentAppDeps = {},
 ): express.Express {
-  const detach = opts.detach;
+  const detach = opts.detach ? detachedTurnsConfig(opts.detach) : undefined;
   if (detach && opts.lock !== undefined) {
     throw new Error(
       'onAgentRequest: do not set lock together with detach; set lock in defineDetachedTurns.',
@@ -139,7 +139,7 @@ export function createAgentApp<S>(
     signedIn: true,
     enforceAppCheck: true,
   });
-  const contextProvider: ContextProvider<FirebaseContext> =
+  const contextProvider: ContextProvider =
     deps.contextProvider ??
     ((request) =>
       resolveBoolean(opts.enforceAppCheck)
@@ -160,9 +160,10 @@ export function createAgentApp<S>(
     ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   let detachDeps: DetachDeps | undefined;
   const getDetachDeps = (): DetachDeps | undefined => {
-    if (!detach) return undefined;
+    const handle = opts.detach;
+    if (!handle) return undefined;
     detachDeps ??= {
-      ...defaultDetachDeps(detach, deps.region ?? (() => undefined)),
+      ...defaultDetachDeps(handle, deps.region ?? (() => undefined)),
       sleep,
       ...deps.detach,
     };
@@ -198,7 +199,7 @@ export function createAgentApp<S>(
             input.detach && detach?.enabled() ? getDetachDeps() : undefined;
           if (!detachDeps) assertNotDetach(input);
           let sessionId = await resolveSessionId(init, agent, ctx);
-          if (detach && detachDeps) {
+          if (opts.detach && detachDeps) {
             if (!sessionId && init?.snapshotId) {
               throw new GenkitError({
                 status: 'NOT_FOUND',
@@ -213,7 +214,7 @@ export function createAgentApp<S>(
               input,
               init: { ...init, sessionId: init?.sessionId || sessionId },
               sessionId,
-              detach,
+              detach: opts.detach,
               deps: detachDeps,
             });
             return;

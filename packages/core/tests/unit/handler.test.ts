@@ -52,6 +52,7 @@ async function setup(
     lock?: TurnLock | false;
     timeoutSeconds?: number;
     uid?: string | null;
+    withoutRawToken?: boolean;
     authorize?: AgentRequestOptions['authorize'];
     beforeTurn?: AgentRequestOptions['beforeTurn'];
   } = {},
@@ -84,7 +85,12 @@ async function setup(
           : { timeoutSeconds: opts.timeoutSeconds },
     },
     {
-      contextProvider: () => (uid ? authContext(uid) : {}),
+      contextProvider: () => {
+        if (!uid) return {};
+        if (!opts.withoutRawToken) return authContext(uid);
+        const { auth } = authContext(uid);
+        return { auth: { uid: auth.uid, token: auth.token } };
+      },
       sleep: async () => {},
     },
   );
@@ -338,12 +344,35 @@ describe('createAgentApp', () => {
   });
 
   test('answers 409 ABORTED when the session lock is held', async () => {
-    const { lock, released } = fakeLock(true);
+    const { lock, released, acquired } = fakeLock(true);
     const { post } = await setup({ lock });
     const res = await post('/', { data: turn(), init: { sessionId: 's1' } });
     expect(res.status).toBe(409);
     expect(await res.json()).toMatchObject({ status: 'ABORTED' });
     expect(released).toHaveLength(0);
+    expect(acquired).toHaveLength(5);
+  });
+
+  test('retries a busy lock and runs the turn once it frees', async () => {
+    const { lock, acquired } = fakeLock();
+    const acquire = lock.acquire.bind(lock);
+    let busy = 2;
+    vi.spyOn(lock, 'acquire').mockImplementation(async (key, opts) => {
+      const lease = await acquire(key, opts);
+      return busy-- > 0 ? null : lease;
+    });
+    const { post } = await setup({ lock });
+    const res = await post('/', { data: turn(), init: { sessionId: 's1' } });
+    expect(res.status).toBe(200);
+    expect(acquired).toHaveLength(3);
+  });
+
+  test('answers 401 to a context without the raw ID token', async () => {
+    const { lock, acquired } = fakeLock();
+    const { post } = await setup({ lock, withoutRawToken: true });
+    const res = await post('/', { data: turn(), init: { sessionId: 's1' } });
+    expect(res.status).toBe(401);
+    expect(acquired).toHaveLength(0);
   });
 
   test('skips locking when lock is false', async () => {

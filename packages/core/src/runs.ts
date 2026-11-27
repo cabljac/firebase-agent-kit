@@ -15,6 +15,7 @@ export type RunStatus =
   | 'done'
   | 'failed'
   | 'cancelled'
+  | 'aborted'
   | 'abandoned';
 
 /** An error recorded on a run. */
@@ -51,6 +52,18 @@ export interface ClaimedRun extends NewRun {
 /** Why a claim was refused. */
 export type ClaimRefusal = 'missing' | 'not-queued' | 'wrong-instance';
 
+/**
+ * A run that waited in the queue longer than its turn route can have waited.
+ * The claim cancels it; the worker releases its lock.
+ */
+export interface StaleRun {
+  stale: true;
+  lockKey: string;
+}
+
+/** A terminal run status the worker writes. */
+export type FinishStatus = 'done' | 'failed' | 'cancelled' | 'aborted';
+
 /** Outcome of recording a worker's output. */
 export type OutputRecord = 'recorded' | 'abandoned';
 
@@ -78,19 +91,21 @@ export interface RunStore {
   abandonIfNoOutput(runId: string): Promise<AbandonOutcome>;
   /**
    * Moves `queued` to `running` and removes `input`, `init` and `claims` from
-   * the document in the same transaction.
+   * the document in the same transaction. A run created more than
+   * `staleAfterMs` before `now` is cancelled instead.
    */
   claim(
     runId: string,
     instanceId: string | null,
     now: number,
-  ): Promise<ClaimedRun | ClaimRefusal>;
+    staleAfterMs: number,
+  ): Promise<ClaimedRun | ClaimRefusal | StaleRun>;
   /** Records an output. A run the turn route abandoned is not overwritten. */
   recordOutput(runId: string, output: AgentOutput): Promise<OutputRecord>;
   /** Writes a terminal status with optional details. */
   finish(
     runId: string,
-    status: 'done' | 'failed' | 'cancelled',
+    status: FinishStatus,
     details: {
       error?: RunError;
       final?: { status: string | null; finishReason: string | null };
@@ -141,16 +156,33 @@ const STANDARD_CLAIMS = new Set([
 
 /**
  * Returns the claims with the custom claims replaced by `customClaims`, the
- * current custom claims of the user. Standard ID token claims are kept.
+ * current custom claims of the user. Standard ID token claims are kept,
+ * including `iat` and `exp` of the original token, which can be in the past.
  */
 export function refreshClaims(
   claims: DecodedIdToken,
   customClaims: Record<string, unknown> | undefined,
 ): DecodedIdToken {
+  const custom = Object.fromEntries(
+    Object.entries(customClaims ?? {}).filter(
+      ([key]) => !STANDARD_CLAIMS.has(key),
+    ),
+  );
   const standard = Object.fromEntries(
     Object.entries(claims).filter(([key]) => STANDARD_CLAIMS.has(key)),
   );
-  return { ...customClaims, ...standard } as DecodedIdToken;
+  return {
+    ...custom,
+    ...standard,
+    aud: claims.aud,
+    auth_time: claims.auth_time,
+    exp: claims.exp,
+    firebase: claims.firebase,
+    iat: claims.iat,
+    iss: claims.iss,
+    sub: claims.sub,
+    uid: claims.uid,
+  };
 }
 
 /**
@@ -180,6 +212,12 @@ export function userCheckFailure(
   }
   return undefined;
 }
+
+/** The error of a run cancelled because it waited too long in the queue. */
+export const STALE_ERROR: RunError = {
+  status: 'DEADLINE_EXCEEDED',
+  message: 'The run waited in the queue longer than its turn route waits.',
+};
 
 function readRun(data: FirebaseFirestore.DocumentData): RunDoc {
   return {
@@ -257,7 +295,8 @@ export class FirestoreRunStore implements RunStore {
     runId: string,
     instanceId: string | null,
     now: number,
-  ): Promise<ClaimedRun | ClaimRefusal> {
+    staleAfterMs: number,
+  ): Promise<ClaimedRun | ClaimRefusal | StaleRun> {
     const ref = this.ref(runId);
     return this.db().runTransaction(async (tx) => {
       const snap = await tx.get(ref);
@@ -265,6 +304,20 @@ export class FirestoreRunStore implements RunStore {
       if (!data) return 'missing';
       if (data.status !== 'queued') return 'not-queued';
       if ((data.instanceId ?? null) !== instanceId) return 'wrong-instance';
+      if (
+        typeof data.createdAt === 'number' &&
+        now - data.createdAt > staleAfterMs
+      ) {
+        tx.update(ref, {
+          status: 'cancelled',
+          settledAt: now,
+          error: STALE_ERROR,
+          input: FieldValue.delete(),
+          init: FieldValue.delete(),
+          claims: FieldValue.delete(),
+        });
+        return { stale: true, lockKey: data.lockKey };
+      }
       tx.update(ref, {
         status: 'running',
         claimedAt: now,
@@ -302,7 +355,7 @@ export class FirestoreRunStore implements RunStore {
 
   async finish(
     runId: string,
-    status: 'done' | 'failed' | 'cancelled',
+    status: FinishStatus,
     details: {
       error?: RunError;
       final?: { status: string | null; finishReason: string | null };

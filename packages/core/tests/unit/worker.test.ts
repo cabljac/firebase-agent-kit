@@ -10,8 +10,10 @@ vi.mock('firebase-functions/logger', () => ({
 import { RENEW_INTERVAL_MS, WORKER_LEASE_MS } from '../../src/detach.js';
 import type { AgentAuthContext, TurnLock } from '../../src/types.js';
 import {
+  RENEW_GIVE_UP_MS,
   runDetachedTask,
   SELF_ABORT_MARGIN_MS,
+  STALE_RUN_MS,
   type TaskAgent,
   type WorkerDeps,
 } from '../../src/worker.js';
@@ -51,7 +53,9 @@ function fakeLock(renewResults: Array<boolean | Error> = []) {
   return { lock, calls };
 }
 
-function fakeAgent(opts: { output?: AgentOutput; fail?: unknown } = {}) {
+function fakeAgent(
+  opts: { output?: AgentOutput; fail?: unknown; hang?: boolean } = {},
+) {
   let settle: (s: { status: string; finishReason: string }) => void = () => {};
   const settled = new Promise<{ status: string; finishReason: string }>(
     (resolve) => {
@@ -66,7 +70,7 @@ function fakeAgent(opts: { output?: AgentOutput; fail?: unknown } = {}) {
       return opts.output ?? detachedOutput;
     }),
     abort: vi.fn(async () => {
-      settle({ status: 'aborted', finishReason: 'aborted' });
+      if (!opts.hang) settle({ status: 'aborted', finishReason: 'aborted' });
       return 'pending';
     }),
     waitForSettled: vi.fn(async () => settled),
@@ -78,18 +82,20 @@ function fakeAgent(opts: { output?: AgentOutput; fail?: unknown } = {}) {
   };
 }
 
-async function setup(
-  over: Partial<WorkerDeps> & { instanceId?: string | null } = {},
-) {
+async function setup(over: Partial<WorkerDeps> & { createdAt?: number } = {}) {
   const runs = new MemoryRunStore();
-  await runs.create('r1', {
-    uid: 'u1',
-    instanceId: null,
-    lockKey: 'key1',
-    input: { message: { role: 'user', content: [{ text: 'hi' }] } },
-    init: { sessionId: 's1' },
-    claims,
-  });
+  await runs.create(
+    'r1',
+    {
+      uid: 'u1',
+      instanceId: null,
+      lockKey: 'key1',
+      input: { message: { role: 'user', content: [{ text: 'hi' }] } },
+      init: { sessionId: 's1' },
+      claims,
+    },
+    over.createdAt ?? Date.now(),
+  );
   const { lock, calls } = fakeLock();
   const deps: WorkerDeps = {
     runs,
@@ -258,7 +264,87 @@ describe('runDetachedTask', () => {
     await vi.advanceTimersByTimeAsync(RENEW_INTERVAL_MS);
     await done;
     expect(agent.abort).toHaveBeenCalledWith('snap1', expect.anything());
-    expect(runs.docs.get('r1')?.final?.status).toBe('aborted');
+    expect(runs.docs.get('r1')).toMatchObject({
+      status: 'aborted',
+      final: { status: 'aborted' },
+      error: { status: 'ABORTED' },
+    });
+  });
+
+  test('cancels a run that waited in the queue longer than the turn route waits, and releases its lock', async () => {
+    const { agent } = fakeAgent();
+    const { runs, deps, calls } = await setup({
+      agent,
+      createdAt: Date.now() - STALE_RUN_MS - 1,
+    });
+    await runDetachedTask('r1', deps);
+    expect(agent.runTurn).not.toHaveBeenCalled();
+    expect(runs.docs.get('r1')).toMatchObject({
+      status: 'cancelled',
+      error: { status: 'DEADLINE_EXCEEDED' },
+    });
+    expect(runs.docs.get('r1')).not.toHaveProperty('input');
+    expect(calls.released).toEqual(['key1/r1']);
+  });
+
+  test('claims a run just inside the stale limit', async () => {
+    const { agent, complete } = fakeAgent();
+    const { deps } = await setup({
+      agent,
+      createdAt: Date.now() - STALE_RUN_MS + 1_000,
+    });
+    const done = runDetachedTask('r1', deps);
+    await flush();
+    expect(agent.runTurn).toHaveBeenCalledTimes(1);
+    complete();
+    await done;
+  });
+
+  test('stops renewing the lease at the worker deadline even when the turn hangs', async () => {
+    const { agent } = fakeAgent({ hang: true });
+    const { lock, calls } = fakeLock();
+    const { deps } = await setup({ agent, lock, timeoutSeconds: 120 });
+    void runDetachedTask('r1', deps);
+    await flush();
+    await vi.advanceTimersByTimeAsync(120_000 - SELF_ABORT_MARGIN_MS - 1);
+    const beforeDeadline = calls.renew;
+    expect(beforeDeadline).toBe(4);
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(calls.renew).toBe(beforeDeadline);
+    expect(agent.abort).toHaveBeenCalledTimes(1);
+  });
+
+  test('aborts the turn when renewals keep failing for longer than the lease allows', async () => {
+    const { agent } = fakeAgent();
+    const { lock } = fakeLock([true, new Error('down'), new Error('down')]);
+    const { runs, deps } = await setup({ agent, lock });
+    const done = runDetachedTask('r1', deps);
+    await flush();
+    await vi.advanceTimersByTimeAsync(RENEW_INTERVAL_MS);
+    expect(agent.abort).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(RENEW_INTERVAL_MS);
+    await done;
+    expect(agent.abort).toHaveBeenCalledTimes(1);
+    expect(RENEW_GIVE_UP_MS).toBeLessThan(WORKER_LEASE_MS - RENEW_INTERVAL_MS);
+    expect(runs.docs.get('r1')?.status).toBe('aborted');
+  });
+
+  test('aborts the turn before releasing the lock when waiting for it fails', async () => {
+    const { agent } = fakeAgent();
+    const order: string[] = [];
+    agent.waitForSettled.mockRejectedValue(new Error('store down'));
+    agent.abort.mockImplementation(async () => {
+      order.push('abort');
+      return 'pending';
+    });
+    const { lock } = fakeLock();
+    vi.spyOn(lock, 'release').mockImplementation(async () => {
+      order.push('release');
+    });
+    const { runs, deps } = await setup({ agent, lock });
+    await runDetachedTask('r1', deps);
+    expect(order).toEqual(['abort', 'release']);
+    expect(runs.docs.get('r1')?.status).toBe('failed');
   });
 
   test('a renewal error is logged, not thrown, and does not abort the turn', async () => {

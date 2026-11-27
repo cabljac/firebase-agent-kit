@@ -73,7 +73,7 @@ type Worker = (runs: MemoryRunStore, runId: string) => void;
 /** A worker that claims at once and reports a detached output. */
 const prompt: Worker = (runs, runId) => {
   setTimeout(async () => {
-    await runs.claim(runId, null);
+    await runs.claim(runId, null, Date.now(), 60_000);
     await runs.recordOutput(runId, {
       sessionId: 's1',
       snapshotId: 'snap1',
@@ -270,10 +270,11 @@ describe('detached turns on the turn route', () => {
 
   test('abandons a claimed run without output after the output wait, keeping the lock for the worker', async () => {
     const { post, lock, runs } = await setup({
-      worker: (r, runId) => void r.claim(runId, null),
+      worker: (r, runId) => void r.claim(runId, null, Date.now(), 60_000),
     });
     const res = await post(detachTurn());
     expect(res.status).toBe(503);
+    expect((await res.json()).message).toContain('retry in a few seconds');
     expect(runs.docs.get('run1')?.status).toBe('abandoned');
     expect(lock.holders.get(KEY)).toBe('run1');
   });
@@ -291,11 +292,39 @@ describe('detached turns on the turn route', () => {
     expect(lock.holders.size).toBe(0);
   });
 
+  test('a failed watch while waiting for the claim cancels the run and releases the lock', async () => {
+    const { post, lock, runs } = await setup({ worker: () => {} });
+    vi.spyOn(runs, 'watch').mockImplementation((_id, _onChange, onError) => {
+      queueMicrotask(() => onError(new Error('listen failed')));
+      return () => {};
+    });
+    const res = await post(detachTurn());
+    expect(res.status).toBe(503);
+    expect(runs.docs.get('run1')?.status).toBe('cancelled');
+    expect(lock.holders.size).toBe(0);
+  });
+
+  test('a failed watch while waiting for the output abandons the run', async () => {
+    const { post, runs } = await setup({
+      worker: (r, runId) => void r.claim(runId, null, Date.now(), 60_000),
+    });
+    const watch = runs.watch.bind(runs);
+    vi.spyOn(runs, 'watch')
+      .mockImplementationOnce(watch)
+      .mockImplementationOnce((_id, _onChange, onError) => {
+        queueMicrotask(() => onError(new Error('listen failed')));
+        return () => {};
+      });
+    const res = await post(detachTurn());
+    expect(res.status).toBe(503);
+    expect(runs.docs.get('run1')?.status).toBe('abandoned');
+  });
+
   test('relays the error of a run the worker refused', async () => {
     const { post } = await setup({
       worker: (runs, runId) => {
         setTimeout(async () => {
-          await runs.claim(runId, null);
+          await runs.claim(runId, null, Date.now(), 60_000);
           await runs.finish(runId, 'cancelled', {
             error: { status: 'PERMISSION_DENIED', message: 'disabled' },
           });

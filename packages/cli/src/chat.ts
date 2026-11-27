@@ -250,7 +250,7 @@ export class ChatCore implements ChatSession {
     let tip: SessionSnapshot | undefined;
     try {
       tip = await this.agent.getSnapshot({ sessionId });
-      if (!tip) throw new Error(`Snapshot session ${sessionId} not found.`);
+      if (!tip) throw new Error(`Session ${sessionId} not found.`);
       chat = await this.agent.loadChat({ snapshotId: tip.snapshotId });
       messages = chat.messages;
       if (unsettled(tip.status) && tip.parentId) {

@@ -122,6 +122,10 @@ describe('detached turns with the stock client', () => {
       async () => !(await lockDoc(uid, chat.sessionId ?? '').get()).exists,
       5_000,
     );
+    expect((await runsOf(uid))[0]).toMatchObject({
+      status: 'aborted',
+      error: { status: 'ABORTED' },
+    });
   });
 });
 

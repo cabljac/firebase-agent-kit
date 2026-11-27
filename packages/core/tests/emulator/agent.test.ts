@@ -77,8 +77,8 @@ describe('testAgent through the stock remoteAgent client', () => {
       client(idToken).loadChat({ sessionId }),
     ]);
     const results = await Promise.allSettled([
-      one.send('slow 8000'),
-      two.send('slow 8000'),
+      one.send('slow 4000'),
+      two.send('slow 4000'),
     ]);
 
     const fulfilled = results.filter((r) => r.status === 'fulfilled');
@@ -107,8 +107,8 @@ describe('testAgent through the stock remoteAgent client', () => {
       });
 
       const responses = await Promise.all([
-        postRaw('/', { data: userMessage('slow 8000'), init }, idToken),
-        postRaw('/', { data: userMessage('slow 8000'), init }, idToken),
+        postRaw('/', { data: userMessage('slow 4000'), init }, idToken),
+        postRaw('/', { data: userMessage('slow 4000'), init }, idToken),
       ]);
 
       expect(responses.map((r) => r.status).sort()).toEqual([200, 409]);

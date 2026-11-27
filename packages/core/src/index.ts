@@ -1,4 +1,5 @@
 export { defineDetachedTurns } from './detach.js';
+export type { DetachedTurns } from './detached-turns.js';
 export { isAuthedContext, requireUid } from './guards.js';
 export { onAgentRequest } from './handler.js';
 export { FirestoreTurnLock } from './lock.js';
@@ -10,7 +11,6 @@ export type {
   AgentRoute,
   AuthorizeRequest,
   BeforeTurnRequest,
-  DetachedTurns,
   DetachedTurnsOptions,
   FirestoreTurnLockOptions,
   TurnLease,

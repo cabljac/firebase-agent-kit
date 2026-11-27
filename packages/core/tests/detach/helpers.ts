@@ -10,7 +10,7 @@ export const PROJECT = 'demo-detach';
 /** Base URL of the functions in the emulator. */
 export const BASE = `http://127.0.0.1:5101/${PROJECT}/us-central1`;
 const SIGN_UP =
-  'http://127.0.0.1:9199/identitytoolkit.googleapis.com/v1/accounts:signUp?key=fake';
+  'http://127.0.0.1:9109/identitytoolkit.googleapis.com/v1/accounts:signUp?key=fake';
 
 /** The Admin SDK app on the suite's emulators. */
 export function admin() {

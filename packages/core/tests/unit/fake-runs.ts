@@ -1,18 +1,22 @@
 import type { AgentOutput } from 'genkit/beta';
-import type {
-  AbandonOutcome,
-  ClaimedRun,
-  ClaimRefusal,
-  NewRun,
-  OutputRecord,
-  RunDoc,
-  RunError,
-  RunStore,
+import {
+  type AbandonOutcome,
+  type ClaimedRun,
+  type ClaimRefusal,
+  type FinishStatus,
+  type NewRun,
+  type OutputRecord,
+  type RunDoc,
+  type RunError,
+  type RunStore,
+  STALE_ERROR,
+  type StaleRun,
 } from '../../src/runs.js';
 
 /** A stored run: the document fields the tests look at. */
 export type StoredRun = RunDoc &
   Partial<NewRun> & {
+    createdAt?: number;
     final?: { status: string | null; finishReason: string | null };
   };
 
@@ -35,12 +39,16 @@ export class MemoryRunStore implements RunStore {
     if (run) this.put(runId, { ...run, ...patch });
   }
 
-  async create(runId: string, run: NewRun): Promise<void> {
+  async create(runId: string, run: NewRun, now: number): Promise<void> {
     if (this.docs.has(runId)) throw new Error('exists');
-    this.put(runId, { ...run, status: 'queued' });
+    this.put(runId, { ...run, status: 'queued', createdAt: now });
   }
 
-  watch(runId: string, onChange: (run: RunDoc | undefined) => void) {
+  watch(
+    runId: string,
+    onChange: (run: RunDoc | undefined) => void,
+    _onError: (err: unknown) => void,
+  ): () => void {
     const set = this.listeners.get(runId) ?? new Set();
     set.add(onChange);
     this.listeners.set(runId, set);
@@ -50,7 +58,9 @@ export class MemoryRunStore implements RunStore {
         onChange(run ? { ...run } : undefined);
       }
     });
-    return () => set.delete(onChange);
+    return () => {
+      set.delete(onChange);
+    };
   }
 
   async cancelIfQueued(runId: string, error: RunError): Promise<boolean> {
@@ -73,12 +83,18 @@ export class MemoryRunStore implements RunStore {
   async claim(
     runId: string,
     instanceId: string | null,
-  ): Promise<ClaimedRun | ClaimRefusal> {
+    now: number,
+    staleAfterMs: number,
+  ): Promise<ClaimedRun | ClaimRefusal | StaleRun> {
     const run = this.docs.get(runId);
     if (!run) return 'missing';
     if (run.status !== 'queued') return 'not-queued';
     if (run.instanceId !== instanceId) return 'wrong-instance';
     const { input, init, claims, ...rest } = run;
+    if (run.createdAt !== undefined && now - run.createdAt > staleAfterMs) {
+      this.put(runId, { ...rest, status: 'cancelled', error: STALE_ERROR });
+      return { stale: true, lockKey: run.lockKey };
+    }
     this.put(runId, { ...rest, status: 'running' });
     if (!input || !claims) throw new Error('incomplete run');
     return {
@@ -109,7 +125,7 @@ export class MemoryRunStore implements RunStore {
 
   async finish(
     runId: string,
-    status: 'done' | 'failed' | 'cancelled',
+    status: FinishStatus,
     details: {
       error?: RunError;
       final?: { status: string | null; finishReason: string | null };

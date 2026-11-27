@@ -4,6 +4,7 @@ import type { Firestore } from 'firebase-admin/firestore';
 import type { Expression } from 'firebase-functions/params';
 import type { HttpsOptions } from 'firebase-functions/v2/https';
 import type { AgentInit, AgentInput, SessionStore } from 'genkit/beta';
+import type { DetachedTurns } from './detached-turns.js';
 
 /** Options for {@link createUserScopedStore}. */
 export interface UserScopedStoreOptions {
@@ -66,7 +67,8 @@ export type AgentRequestContext = FirebaseContext & {
  * The authenticated caller of a turn, on the HTTP route and in the
  * {@link onAgentTask} worker. The worker has no raw ID token, and its
  * `token` holds the claims frozen at enqueue time with custom claims
- * refreshed when the worker claimed the run.
+ * refreshed when the worker claimed the run; its `iat` and `exp` are those of
+ * the original ID token and can be in the past.
  */
 export interface AgentAuthContext {
   auth: { uid: string; token: DecodedIdToken };
@@ -167,11 +169,8 @@ export interface AgentRequestOptions<S = unknown> {
   detach?: DetachedTurns<S>;
 }
 
-/**
- * The resolved detached turn config from {@link defineDetachedTurns}. Pass
- * the same object to {@link onAgentRequest} and {@link onAgentTask}.
- */
-export interface DetachedTurns<S = unknown> {
+/** The resolved detached turn config behind a {@link DetachedTurns} handle. */
+export interface DetachedTurnsConfig<S = unknown> {
   readonly queue: string;
   readonly store: SessionStore<S>;
   readonly instanceId: string | null;
@@ -179,7 +178,7 @@ export interface DetachedTurns<S = unknown> {
   readonly runsCollection: string;
   /** Whether detached turns are on, read now. */
   enabled(): boolean;
-  /** The worker timeout in seconds, read now and capped at 1800. */
+  /** The worker timeout in seconds, read now and clamped to 60..1800. */
   timeoutSeconds(): number;
   /** The worker timeout for the function definition. */
   readonly functionTimeout: number | Expression<number>;

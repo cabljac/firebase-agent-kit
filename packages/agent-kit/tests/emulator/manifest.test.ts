@@ -65,7 +65,7 @@ describe('deploy discovery', () => {
     });
   });
 
-  test('declares the Cloud Tasks API and the enqueue and invoke roles', async () => {
+  test('declares the Cloud Tasks API and the enqueue, invoke and user-read roles', async () => {
     const { manifest } = await discover('support');
     expect(manifest.requiredAPIs).toEqual(
       expect.arrayContaining([
@@ -74,6 +74,7 @@ describe('deploy discovery', () => {
     );
     expect(JSON.stringify(manifest)).toContain('roles/cloudtasks.enqueuer');
     expect(JSON.stringify(manifest)).toContain('roles/run.invoker');
+    expect(JSON.stringify(manifest)).toContain('roles/firebaseauth.viewer');
   });
 
   test('declares the kit params and binds the function options to them', async () => {

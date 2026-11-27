@@ -118,6 +118,13 @@ test('explains a session that cannot be loaded', () => {
   ).toBe('unauthenticated');
 });
 
+test('explains a session id with no snapshots as session not found', () => {
+  expect(explain(new Error('Session s9 not found.'))).toMatchObject({
+    kind: 'session-not-found',
+    title: 'Session not found',
+  });
+});
+
 test('problemLines formats a problem as plain text', () => {
   expect(
     problemLines({ kind: 'busy', title: 'T', detail: 'D', hint: 'H' }),

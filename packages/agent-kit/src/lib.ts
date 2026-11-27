@@ -49,6 +49,16 @@ export interface PromptValidationOptions {
    */
   booleanParams?: string[];
   /**
+   * The names of the detached turn params. When the raw value of `enabled`
+   * is `true`, `workerTimeoutSeconds` must be a whole number from 60 to 1800
+   * and `turnTimeoutSeconds` must be at least 60, when set.
+   */
+  detachedTurns?: {
+    enabled: string;
+    workerTimeoutSeconds: string;
+    turnTimeoutSeconds: string;
+  };
+  /**
    * The function source directory, which holds `skills/`. Defaults to the
    * working directory when the check runs.
    */
@@ -540,6 +550,10 @@ export function createPromptCheck(
         invalidParams,
       });
     }
+    const detachProblem = opts.detachedTurns
+      ? findDetachedTurnsProblem(opts.instanceId, opts.detachedTurns)
+      : undefined;
+    if (detachProblem) fail(detachProblem, {});
     const problems = await findPromptAgentProblems(
       opts.registry,
       opts.instanceId,
@@ -553,6 +567,32 @@ export function createPromptCheck(
     }
     validated = true;
   };
+}
+
+function wholeNumber(raw: string | undefined): number | undefined {
+  return raw !== undefined && /^\d+$/.test(raw) ? Number(raw) : undefined;
+}
+
+function findDetachedTurnsProblem(
+  instanceId: string,
+  names: NonNullable<PromptValidationOptions['detachedTurns']>,
+): string | undefined {
+  if (process.env[names.enabled] !== 'true') return undefined;
+  const where = `in config-${instanceId}/.env.<projectId>`;
+  const worker = process.env[names.workerTimeoutSeconds];
+  const workerSeconds = wholeNumber(worker);
+  if (
+    worker !== undefined &&
+    (workerSeconds === undefined || workerSeconds < 60 || workerSeconds > 1800)
+  ) {
+    return `Agent kit instance "${instanceId}" has ${names.enabled}=true and an invalid value for ${names.workerTimeoutSeconds}: ${JSON.stringify(worker)}. Set it to a whole number from 60 to 1800 ${where}.`;
+  }
+  const turn = process.env[names.turnTimeoutSeconds];
+  const turnSeconds = wholeNumber(turn);
+  if (turn !== undefined && (turnSeconds === undefined || turnSeconds < 60)) {
+    return `Agent kit instance "${instanceId}" has ${names.enabled}=true and ${names.turnTimeoutSeconds}: ${JSON.stringify(turn)}. Detached turns need it to be 60 or more ${where}.`;
+  }
+  return undefined;
 }
 
 function findInvalidBooleanParams(

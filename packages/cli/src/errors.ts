@@ -157,7 +157,7 @@ export function explain(err: unknown, ctx: ExplainContext = {}): Problem {
       detail: message,
       hint: 'Check the agent URL and your network connection, then try again.',
     };
-  if (/^Snapshot (session )?\S+ not found\.$/.test(message)) {
+  if (/^(Snapshot (session )?|Session )\S+ not found\.$/.test(message)) {
     return {
       kind: 'session-not-found',
       title: 'Session not found',

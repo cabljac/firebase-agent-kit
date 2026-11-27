@@ -18,7 +18,12 @@ import {
 const runs = () => new FirestoreRunStore(() => admin().db, 'agent-kit-runs');
 
 /** Writes a queued run and takes its lock, the way the turn route does. */
-async function queuedRun(uid: string, idToken: string, sessionId: string) {
+async function queuedRun(
+  uid: string,
+  idToken: string,
+  sessionId: string,
+  createdAt = Date.now(),
+) {
   const runId = randomUUID();
   const claims = await admin().auth.verifyIdToken(idToken);
   const key = lockKey(uid, sessionId);
@@ -37,7 +42,7 @@ async function queuedRun(uid: string, idToken: string, sessionId: string) {
       init: { sessionId },
       claims,
     },
-    Date.now(),
+    createdAt,
   );
   return runId;
 }
@@ -119,6 +124,20 @@ describe('worker deliveries', () => {
     expect((await lockDoc(uid, sessionId).get()).exists).toBe(false);
   });
 
+  test('a run that waited in the queue past the turn route is cancelled, not run, and its lock released', async () => {
+    const { uid, idToken } = await signUp();
+    const sessionId = await sessionOf(idToken);
+    const runId = await queuedRun(uid, idToken, sessionId, Date.now() - 60_000);
+    const before = await snapshotCount(uid);
+    expect(await deliver(runId)).toBe(204);
+    expect((await runsOf(uid))[0]).toMatchObject({
+      status: 'cancelled',
+      error: { status: 'DEADLINE_EXCEEDED' },
+    });
+    expect(await snapshotCount(uid)).toBe(before);
+    expect((await lockDoc(uid, sessionId).get()).exists).toBe(false);
+  });
+
   test('a run whose lock another holder took is cancelled and not run', async () => {
     const { uid, idToken } = await signUp();
     const sessionId = await sessionOf(idToken);
@@ -144,7 +163,7 @@ describe('FirestoreRunStore', () => {
   test('claim scrubs the input, init and claims in the same write', async () => {
     const { uid, idToken } = await signUp();
     const runId = await queuedRun(uid, idToken, randomUUID());
-    const claimed = await runs().claim(runId, null, Date.now());
+    const claimed = await runs().claim(runId, null, Date.now(), 60_000);
     expect(claimed).toMatchObject({
       uid,
       init: { sessionId: expect.any(String) },
@@ -162,7 +181,9 @@ describe('FirestoreRunStore', () => {
     const { uid, idToken } = await signUp();
     const runId = await queuedRun(uid, idToken, randomUUID());
     const results = await Promise.all(
-      Array.from({ length: 5 }, () => runs().claim(runId, null, Date.now())),
+      Array.from({ length: 5 }, () =>
+        runs().claim(runId, null, Date.now(), 60_000),
+      ),
     );
     expect(results.filter((r) => typeof r !== 'string')).toHaveLength(1);
     expect(results.filter((r) => r === 'not-queued')).toHaveLength(4);
@@ -171,7 +192,7 @@ describe('FirestoreRunStore', () => {
   test('a run of another instance is refused', async () => {
     const { uid, idToken } = await signUp();
     const runId = await queuedRun(uid, idToken, randomUUID());
-    expect(await runs().claim(runId, 'other', Date.now())).toBe(
+    expect(await runs().claim(runId, 'other', Date.now(), 60_000)).toBe(
       'wrong-instance',
     );
   });

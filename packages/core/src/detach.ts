@@ -5,6 +5,11 @@ import { logger } from 'firebase-functions/logger';
 import { Expression } from 'firebase-functions/params';
 import { GenkitError } from 'genkit';
 import type { AgentInit, AgentInput, AgentOutput } from 'genkit/beta';
+import {
+  type DetachedTurns,
+  detachedTurnsConfig,
+  detachedTurnsHandle,
+} from './detached-turns.js';
 import { lockKey } from './keys.js';
 import { FirestoreTurnLock } from './lock.js';
 import { reapDeadTip } from './reaper.js';
@@ -17,7 +22,6 @@ import {
 } from './runs.js';
 import type {
   AgentRequestContext,
-  DetachedTurns,
   DetachedTurnsOptions,
   TurnLease,
   TurnLock,
@@ -34,20 +38,24 @@ export const RENEW_INTERVAL_MS = 30_000;
 /** The lease the turn route takes for a detached turn, until the worker renews it. */
 export const DETACH_LEASE_MS = CLAIM_WAIT_MS + OUTPUT_WAIT_MS + WORKER_LEASE_MS;
 /** Waits between attempts to take a busy turn lock. */
-export const LOCK_RETRY_DELAYS_MS: readonly number[] = [200, 400, 800, 1600];
+export const LOCK_RETRY_DELAYS_MS: readonly number[] = [100, 200, 400, 800];
 
 const DEFAULT_RUNS_COLLECTION = 'agent-kit-runs';
 const DEFAULT_WORKER_TIMEOUT_SECONDS = 540;
 /** The longest timeout a task queue function can have. */
 export const MAX_WORKER_TIMEOUT_SECONDS = 1800;
-const MIN_DISPATCH_DEADLINE_SECONDS = 15;
+/** The shortest worker timeout: the self-abort margin needs room. */
+export const MIN_WORKER_TIMEOUT_SECONDS = 60;
 
-/** Clamps a worker timeout to 1..1800 seconds; unset or invalid gives 540. */
+/** Clamps a worker timeout to 60..1800 seconds; unset or invalid gives 540. */
 export function clampWorkerTimeout(value: unknown): number {
   if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
     return DEFAULT_WORKER_TIMEOUT_SECONDS;
   }
-  return Math.min(MAX_WORKER_TIMEOUT_SECONDS, Math.floor(value));
+  return Math.min(
+    MAX_WORKER_TIMEOUT_SECONDS,
+    Math.max(MIN_WORKER_TIMEOUT_SECONDS, Math.floor(value)),
+  );
 }
 
 /**
@@ -62,7 +70,7 @@ export function defineDetachedTurns<S>(
     throw new Error('defineDetachedTurns: queue is required.');
   }
   const { enabled, timeoutSeconds } = options;
-  return Object.freeze({
+  return detachedTurnsHandle({
     queue: options.queue,
     store: options.store,
     instanceId: options.instanceId ?? null,
@@ -103,10 +111,11 @@ export interface DetachDeps {
  * The production seams for `detach`. `region` names the region of the
  * worker, which shares the turn route's region.
  */
-export function defaultDetachDeps(
-  detach: DetachedTurns<unknown>,
+export function defaultDetachDeps<S>(
+  handle: DetachedTurns<S>,
   region: () => string | undefined,
 ): DetachDeps {
+  const detach = detachedTurnsConfig(handle);
   return {
     runs: new FirestoreRunStore(detach.firestore, detach.runsCollection),
     enqueue: async (runId, dispatchDeadlineSeconds) => {
@@ -186,6 +195,12 @@ type WaitResult =
   | { kind: 'timeout' }
   | { kind: 'closed' };
 
+/**
+ * Waits until `done(run)`, the timeout, or the client closing. A failed watch
+ * is logged and counts as a timeout, so the caller cancels or abandons the
+ * run the same way.
+ */
+
 function waitForRun(
   runs: RunStore,
   runId: string,
@@ -193,17 +208,16 @@ function waitForRun(
   timeoutMs: number,
   closed: AbortSignal,
 ): Promise<WaitResult> {
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve) => {
     let settled = false;
     let unsubscribe: (() => void) | undefined;
-    const finish = (result: WaitResult | Error) => {
+    const finish = (result: WaitResult) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       closed.removeEventListener('abort', onClose);
       unsubscribe?.();
-      if (result instanceof Error) reject(result);
-      else resolve(result);
+      resolve(result);
     };
     const onClose = () => finish({ kind: 'closed' });
     const timer = setTimeout(() => finish({ kind: 'timeout' }), timeoutMs);
@@ -212,14 +226,22 @@ function waitForRun(
       return;
     }
     closed.addEventListener('abort', onClose, { once: true });
-    unsubscribe = runs.watch(
-      runId,
-      (run) => {
-        if (done(run)) finish({ kind: 'run', run });
-      },
-      (err) => finish(err instanceof Error ? err : new Error(String(err))),
-    );
-    if (settled) unsubscribe();
+    try {
+      unsubscribe = runs.watch(
+        runId,
+        (run) => {
+          if (done(run)) finish({ kind: 'run', run });
+        },
+        (err) => {
+          logger.error(`Lost the watch on detached run ${runId}`, err);
+          finish({ kind: 'timeout' });
+        },
+      );
+    } catch (err) {
+      logger.error(`Could not watch detached run ${runId}`, err);
+      finish({ kind: 'timeout' });
+    }
+    if (settled) unsubscribe?.();
   });
 }
 
@@ -268,7 +290,8 @@ export interface DetachedTurnRequest<S> {
 export async function startDetachedTurn<S>(
   request: DetachedTurnRequest<S>,
 ): Promise<void> {
-  const { req, res, context, detach, deps } = request;
+  const { req, res, context, deps } = request;
+  const detach = detachedTurnsConfig(request.detach);
   const { runs } = deps;
   const runId = deps.newRunId();
   const key = lockKey(context.auth.uid, request.sessionId);
@@ -312,10 +335,7 @@ export async function startDetachedTurn<S>(
     throw err;
   }
   try {
-    await deps.enqueue(
-      runId,
-      Math.max(MIN_DISPATCH_DEADLINE_SECONDS, detach.timeoutSeconds()),
-    );
+    await deps.enqueue(runId, detach.timeoutSeconds());
   } catch (err) {
     logger.error(`Failed to enqueue detached run ${runId}`, err);
     await cancelQueued('UNAVAILABLE', 'The detached turn could not be queued.');
@@ -364,7 +384,7 @@ export async function startDetachedTurn<S>(
       throw new GenkitError({
         status: 'UNAVAILABLE',
         message:
-          'The detached turn did not start in time. It was cancelled; try again.',
+          'The detached turn did not start in time. It was cancelled; retry in a few seconds.',
       });
     }
     result = { kind: 'run', run: outcome.run };

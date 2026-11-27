@@ -7,18 +7,27 @@ import {
 } from 'firebase-functions/v2/tasks';
 import { GenkitError } from 'genkit';
 import type { Agent, AgentInit, AgentInput, AgentOutput } from 'genkit/beta';
-import { RENEW_INTERVAL_MS, WORKER_LEASE_MS } from './detach.js';
+import { CLAIM_WAIT_MS, RENEW_INTERVAL_MS, WORKER_LEASE_MS } from './detach.js';
+import { type DetachedTurns, detachedTurnsConfig } from './detached-turns.js';
 import {
+  type FinishStatus,
   FirestoreRunStore,
   type RunError,
   type RunStore,
   refreshClaims,
   userCheckFailure,
 } from './runs.js';
-import type { AgentAuthContext, DetachedTurns, TurnLock } from './types.js';
+import type { AgentAuthContext, TurnLock } from './types.js';
 
 /** The worker aborts its turn this long before its deadline. */
 export const SELF_ABORT_MARGIN_MS = 20_000;
+/**
+ * The worker aborts its turn when no renewal succeeded for this long, which
+ * leaves one renew interval and a margin before the lease runs out.
+ */
+export const RENEW_GIVE_UP_MS = WORKER_LEASE_MS - RENEW_INTERVAL_MS - 10_000;
+/** A run created longer ago than this has no turn route waiting for it. */
+export const STALE_RUN_MS = CLAIM_WAIT_MS + 10_000;
 
 /** The task payload: the id of the run to execute. */
 export interface AgentTaskData {
@@ -69,9 +78,11 @@ function toRunError(err: unknown): RunError {
 /**
  * Executes one detached run: claims it, confirms the lock and the user, runs
  * the turn, records its output and waits until it settles. The lock lease is
- * renewed while the turn runs; a failed renewal aborts the turn. The turn is
- * also aborted shortly before the deadline, and when the turn route gave up
- * on it. The lock is released at the end.
+ * renewed while the turn runs, until the worker deadline. The turn is aborted
+ * when a renewal finds the lock lost, when renewals keep failing, shortly
+ * before the deadline, when the turn route gave up on it, and when waiting
+ * for it fails. Such a run ends `aborted` (`cancelled` when the turn route
+ * gave up). The lock is released at the end.
  */
 export async function runDetachedTask(
   runId: string,
@@ -79,15 +90,32 @@ export async function runDetachedTask(
 ): Promise<void> {
   const { runs, lock, agent } = deps;
   const startedAt = deps.now();
-  const claimed = await runs.claim(runId, deps.instanceId, startedAt);
+  const deadline = startedAt + deps.timeoutSeconds * 1000;
+  const claimed = await runs.claim(
+    runId,
+    deps.instanceId,
+    startedAt,
+    STALE_RUN_MS,
+  );
   if (typeof claimed === 'string') {
     logger.warn(`Refused detached run ${runId}: ${claimed}.`);
+    return;
+  }
+  if ('stale' in claimed) {
+    logger.warn(`Cancelled detached run ${runId}: it waited too long.`);
+    await lock.release(claimed.lockKey, runId);
     return;
   }
   const { uid, lockKey } = claimed;
   let lockHeld = false;
   let renewTimer: ReturnType<typeof setInterval> | undefined;
   let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+  let snapshotId: string | undefined;
+  let context: AgentAuthContext | undefined;
+  const stopRenewing = () => {
+    clearInterval(renewTimer);
+    renewTimer = undefined;
+  };
   try {
     lockHeld = await lock
       .renew(lockKey, runId, WORKER_LEASE_MS)
@@ -112,15 +140,15 @@ export async function runDetachedTask(
       await runs.finish(runId, 'cancelled', { error: failure }, deps.now());
       return;
     }
-    const context: AgentAuthContext = {
+    const turnContext: AgentAuthContext = {
       auth: { uid, token: refreshClaims(claimed.claims, user.customClaims) },
     };
+    context = turnContext;
 
-    let snapshotId: string | undefined;
     let stopReason: string | undefined;
     const abortTurn = () => {
       if (!snapshotId) return;
-      agent.abort(snapshotId, context).catch((err: unknown) => {
+      agent.abort(snapshotId, turnContext).catch((err: unknown) => {
         logger.error(`Failed to abort detached run ${runId}`, err);
       });
     };
@@ -130,21 +158,31 @@ export async function runDetachedTask(
       logger.warn(`Stopping detached run ${runId}: ${reason}.`);
       abortTurn();
     };
+    let lastRenewed = deps.now();
     renewTimer = setInterval(() => {
+      if (deps.now() >= deadline) {
+        stopRenewing();
+        return;
+      }
       lock.renew(lockKey, runId, WORKER_LEASE_MS).then(
         (ok) => {
-          if (!ok) stop('the session lock was lost');
+          if (ok) lastRenewed = deps.now();
+          else stop('the session lock was lost');
         },
         (err: unknown) => {
           logger.warn(`Failed to renew the lock of run ${runId}`, err);
+          if (deps.now() - lastRenewed > RENEW_GIVE_UP_MS) {
+            stop('the session lock could not be renewed');
+          }
         },
       );
     }, RENEW_INTERVAL_MS);
     deadlineTimer = setTimeout(
-      () => stop('the worker deadline is near'),
-      deps.timeoutSeconds * 1000 -
-        SELF_ABORT_MARGIN_MS -
-        (deps.now() - startedAt),
+      () => {
+        stopRenewing();
+        stop('the worker deadline is near');
+      },
+      deadline - SELF_ABORT_MARGIN_MS - deps.now(),
     );
 
     let output: AgentOutput;
@@ -152,7 +190,7 @@ export async function runDetachedTask(
       output = await agent.runTurn(
         claimed.input,
         claimed.init ?? undefined,
-        context,
+        turnContext,
       );
     } catch (err) {
       await runs.finish(
@@ -177,11 +215,19 @@ export async function runDetachedTask(
     snapshotId = output.snapshotId;
     if (abandoned) stop('the turn route gave up waiting');
     else if (stopReason) abortTurn();
-    const final = await agent.waitForSettled(snapshotId, context);
+    const final = await agent.waitForSettled(snapshotId, turnContext);
+    const status: FinishStatus = abandoned
+      ? 'cancelled'
+      : stopReason
+        ? 'aborted'
+        : 'done';
     await runs.finish(
       runId,
-      abandoned ? 'cancelled' : 'done',
+      status,
       {
+        ...(stopReason && {
+          error: { status: 'ABORTED', message: `Stopped: ${stopReason}.` },
+        }),
         final: {
           status: final?.status ?? null,
           finishReason: final?.finishReason ?? null,
@@ -191,11 +237,16 @@ export async function runDetachedTask(
     );
   } catch (err) {
     logger.error(`Detached run ${runId} failed`, err);
+    if (snapshotId && context) {
+      await agent.abort(snapshotId, context).catch((abortErr: unknown) => {
+        logger.error(`Failed to abort detached run ${runId}`, abortErr);
+      });
+    }
     await runs
       .finish(runId, 'failed', { error: toRunError(err) }, deps.now())
       .catch(() => undefined);
   } finally {
-    clearInterval(renewTimer);
+    stopRenewing();
     clearTimeout(deadlineTimer);
     if (lockHeld) await lock.release(lockKey, runId);
   }
@@ -231,16 +282,17 @@ async function getUserOrUndefined(uid: string) {
 /**
  * Builds the Cloud Tasks worker that runs the detached turns of `agent`. Pass
  * the same `detach` object as the `detach` option of {@link onAgentRequest},
- * and export the function under the name `detach.queue`. Tasks are not
- * retried, the timeout comes from `detach` (at most 1800 seconds), and
- * `maxConcurrentDispatches` defaults to 10. When `detach.enabled()` is false
+ * and export the function under its `queue` name. Tasks are not retried,
+ * the timeout comes from `detach` (60 to 1800 seconds), and
+ * `maxConcurrentDispatches` defaults to 10. While detached turns are off,
  * the worker refuses every task.
  */
 export function onAgentTask<S>(
   agent: Agent<S>,
-  detach: DetachedTurns<S>,
+  handle: DetachedTurns<S>,
   taskOptions: Omit<TaskQueueOptions, 'retryConfig' | 'timeoutSeconds'> = {},
 ): TaskQueueFunction<AgentTaskData> {
+  const detach = detachedTurnsConfig(handle);
   const runs = new FirestoreRunStore(detach.firestore, detach.runsCollection);
   const adapted = taskAgent(agent);
   return onTaskDispatched<AgentTaskData>(

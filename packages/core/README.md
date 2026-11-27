@@ -121,7 +121,7 @@ The browser enforces the list. With one origin in the list, firebase-functions s
   });
   ```
 
-- **One turn at a time.** A Firestore lease lock (`agent-kit-locks`) serializes the turns of each session. A turn on a busy session retries the lock for about 3 seconds, then gets 409 `ABORTED`. A turn that starts a new session (no `sessionId` or `snapshotId`) takes no lock, except a detached one.
+- **One turn at a time.** A Firestore lease lock (`agent-kit-locks`) serializes the turns of each session. A turn on a busy session retries the lock for about 1.5 seconds, then gets 409 `ABORTED`. A turn that starts a new session (no `sessionId` or `snapshotId`) takes no lock, except a detached one.
 - **Lease length.** The lease is the function's timeout plus 30 seconds. The timeout is `httpsOptions.timeoutSeconds`, else the `timeoutSeconds` from `setGlobalOptions`, else 60 seconds. A params expression (for example `defineInt('TIMEOUT')`) is read on each request. A value that is unset, zero or negative gives 60 seconds. Only a `setGlobalOptions` call that runs before `onAgentRequest` counts, the same rule firebase-functions uses for the deployed timeout.
 - **Turning the lock off.** Set `lock: false` only when turns on one session never overlap, for example when your only client waits for each reply before it sends the next message. Without the lock, two turns on one session can run at the same time on the same history. You can also pass your own `TurnLock`.
 - **Routes.** It serves the main route plus `/getSnapshot`, `/waitForSnapshot` and `/abort`, the same routes `remoteAgent` uses.
@@ -195,7 +195,7 @@ const snapshot = await task.wait(); // or task.poll(), or task.abort()
 | `queue`          | required              | The export name of the `onAgentTask` function, which is also its queue.                                                                 |
 | `store`          | required              | The agent's own session store. The turn route writes through it to settle a dead turn (see below).                                      |
 | `enabled`        | `true`                | A boolean or a boolean params expression, read on each request and task. When off, `detach: true` gets 400 and the worker refuses work. |
-| `timeoutSeconds` | `540`                 | The worker timeout, a number or an int params expression. Capped at 1800.                                                               |
+| `timeoutSeconds` | `540`                 | The worker timeout, a number or an int params expression. Clamped to 60..1800.                                                          |
 | `instanceId`     | none                  | Recorded on each run. A worker refuses the runs of another instance.                                                                    |
 | `lock`           | a `FirestoreTurnLock` | The turn lock for every turn of the agent. Do not also set the `lock` option of `onAgentRequest`.                                       |
 | `runs`           | `agent-kit-runs`      | `{ collection, firestore }` for the run documents.                                                                                      |
@@ -215,23 +215,27 @@ The worker claims the run in a transaction (a second delivery of the task is ref
 
 **When the turn does not start.**
 
-| Case                                                                    | Result                                                                                                                                                     |
-| ----------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| The task cannot be enqueued                                             | The run is cancelled, the lock released, 503 `UNAVAILABLE`.                                                                                                |
-| No worker claims the run in 20 seconds                                  | The run is cancelled, the lock released, 503 `UNAVAILABLE`.                                                                                                |
-| The client goes away while the run is queued                            | The run is cancelled and the lock released.                                                                                                                |
-| The worker claimed the run but the turn did not start in 20 seconds     | 503 `UNAVAILABLE`. The run is marked abandoned, and the worker aborts the turn as soon as its snapshot exists, so no turn runs without the client knowing. |
-| The user is deleted or disabled, or revoked their tokens, by claim time | The run is cancelled without running, the lock released, and the turn route answers 401 or 403.                                                            |
-| The run document would pass Firestore's 1 MiB limit                     | 400 `INVALID_ARGUMENT`, before the lock.                                                                                                                   |
+| Case                                                                     | Result                                                                                                                                                                                                            |
+| ------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| The task cannot be enqueued                                              | The run is cancelled, the lock released, 503 `UNAVAILABLE`.                                                                                                                                                       |
+| No worker claims the run in 20 seconds                                   | The run is cancelled, the lock released, 503 `UNAVAILABLE`.                                                                                                                                                       |
+| The client goes away while the run is queued                             | The run is cancelled and the lock released.                                                                                                                                                                       |
+| The client goes away after the worker claimed the run                    | The turn keeps running. The client can find it again by its session id.                                                                                                                                           |
+| The worker claimed the run but the turn did not start in 20 seconds      | 503 `UNAVAILABLE` (retry in a few seconds). The run is marked abandoned, and the worker aborts the turn as soon as its snapshot exists, so the client that got the 503 is not left with a turn running behind it. |
+| The task reaches a worker more than 30 seconds after the run was written | The turn route is gone, so the worker cancels the run without running it and releases the lock.                                                                                                                   |
+| The user is deleted or disabled, or revoked their tokens, by claim time  | The run is cancelled without running, the lock released, and the turn route answers 401 or 403.                                                                                                                   |
+| The run document would pass Firestore's 1 MiB limit                      | 400 `INVALID_ARGUMENT`, before the lock.                                                                                                                                                                          |
 
 **Crash recovery.** When the worker dies mid-turn, the snapshot stops getting heartbeats and reads as `expired`, and the lock lease lapses within 90 seconds. The next turn on the session takes the lock and, when the session's latest snapshot is `pending` or `aborting` with a heartbeat older than 60 seconds, rewrites it as `aborted` with the state of its parent snapshot. The turn then continues, whether the client names the session or the dead snapshot.
 
-**Fencing.** When a renewal finds that the worker no longer holds the lock, the worker aborts its turn. The worker also aborts the turn 20 seconds before its timeout, so the snapshot settles as `aborted` instead of dying.
+A crashed worker leaves its run document as `running` or `detached`, without a final status. The TTL policy removes it.
+
+**Fencing.** When a renewal finds that the worker no longer holds the lock, the worker aborts its turn. It also aborts the turn when no renewal succeeded for 50 seconds, before the 90-second lease can lapse. The worker aborts the turn 20 seconds before its timeout and stops renewing then, so a hung turn cannot keep the lock alive past the timeout. When waiting for the turn fails, the worker aborts it before it releases the lock. A turn the worker stopped ends with the run status `aborted`; one the turn route gave up on ends `cancelled`.
 
 ### Required IAM and setup
 
 - Enable the Cloud Tasks API (`cloudtasks.googleapis.com`).
-- The runtime service account of the turn route needs `roles/cloudtasks.enqueuer` to enqueue, and `roles/run.invoker` (or the Cloud Functions invoker role) so the task can call the worker. Depending on the project, it may also need `roles/iam.serviceAccountUser` on itself to sign the task's OIDC token.
+- The runtime service account of the turn route needs `roles/cloudtasks.enqueuer` to enqueue, and `roles/run.invoker` (or the Cloud Functions invoker role) so the task can call the worker. Enqueueing a task with an OIDC token also needs `iam.serviceAccounts.actAs` on the runtime service account. This last part is not verified on a real deploy yet.
 - The worker needs `roles/datastore.user` (run documents, locks, sessions) and `firebaseauth.users.get` (for example `roles/firebaseauth.viewer`) for the `getUser` check.
 - Set a TTL policy on the `expireAt` field of the run collection. A run document is kept 7 days:
 
@@ -248,6 +252,10 @@ The worker claims the run in a transaction (a second delivery of the task is ref
 - **Frozen claims.** The worker runs the turn with the ID token claims from the request, with the custom claims refreshed at claim time. It checks the user once, when it claims the run, not again during the turn.
 - **No raw token.** The raw ID token is never stored or passed to the worker. In the worker, `context.auth` has `uid` and `token` only (`AgentAuthContext`), so a tool that needs the raw token cannot run detached.
 - **Hooks at enqueue only.** App Check, `authorize` and `beforeTurn` run on the turn route, not in the worker.
+- **No per-user limit.** `maxConcurrentDispatches` caps the running detached turns of the whole function, not of one user. One user can fill the queue. Use `beforeTurn` to rate-limit detached turns per user (it gets the parsed `input`, so it can check `input.detach`).
+- **Broad roles.** `roles/run.invoker` and `roles/cloudtasks.enqueuer` are granted at the project level when you grant them to the service account there. Tools run as the same service account, so a tool could enqueue tasks or invoke other Cloud Run services in the project. Grant them on the queue and the worker service instead where you can.
+- **Stale token times.** In the worker, `context.auth.token.iat` and `exp` are those of the original ID token and can be in the past. Do not use them to judge freshness.
+- **Opaque config.** `defineDetachedTurns` returns an opaque `DetachedTurns` handle. Pass it on; do not read it.
 - **The Functions emulator** does not pass a client disconnect on to the function, so the cancel on disconnect cannot be seen there.
 
 ## Security

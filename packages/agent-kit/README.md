@@ -111,11 +111,14 @@ The kit declares these roles and APIs:
 | `roles/datastore.user`      | Read and write the sessions, the turn locks and the detached runs.           |
 | `roles/cloudtasks.enqueuer` | Enqueue detached turns for `agentWorker`.                                    |
 | `roles/run.invoker`         | Let Cloud Tasks call `agentWorker`.                                          |
+| `roles/firebaseauth.viewer` | Let `agentWorker` read the user (`getUser`) before it runs a detached turn.  |
 | `aiplatform.googleapis.com` | Vertex AI, for the model calls.                                              |
 | `firestore.googleapis.com`  | Firestore, for the sessions and the per-session turn locks.                  |
 | `cloudtasks.googleapis.com` | Cloud Tasks, for detached turns. Declared even when `DETACHED_TURNS` is off. |
 
-The detached turn worker also reads the user with the Admin SDK (`getAuth().getUser`). Signing the task's OIDC token can need `roles/iam.serviceAccountUser` on the kit's service account. These two are not declared yet; check them on a real deploy before you turn on `DETACHED_TURNS`.
+Enqueueing a detached turn creates a task with an OIDC token for the kit's service account, which needs `iam.serviceAccounts.actAs` on that account. The kit does not declare `roles/iam.serviceAccountUser` for it, because a project-level grant lets the account act as every service account in the project. Grant `actAs` on the kit's own service account before you turn on `DETACHED_TURNS`. This is not verified on a real deploy yet.
+
+The roles are granted at the project level. Tools run as the same service account, so with `roles/cloudtasks.enqueuer` and `roles/run.invoker` a tool could enqueue tasks or invoke other Cloud Run services in the project. Keep that in mind when you write tools.
 
 The first deploy creates a `firebase-fn-*` service account for the kit, grants it these roles at the project level, enables the APIs and attaches the account to the function of every instance. So the account that deploys needs `iam.serviceAccounts.create` and `resourcemanager.projects.setIamPolicy` (for example through `roles/owner`, or `roles/iam.serviceAccountAdmin` and `roles/resourcemanager.projectIamAdmin`).
 
@@ -351,7 +354,7 @@ An empty list makes firebase-functions log a warning on every request, except in
 
 **`ENFORCE_APP_CHECK`** works in the emulator only with a real project and the App Check debug provider.
 
-**`DETACHED_TURNS`** is experimental. With it on, keep `TIMEOUT_SECONDS` at 60 or more: the turn route waits up to 40 seconds for the worker. See [Detached turns](https://github.com/cabljac/firebase-agent-kit/tree/main/packages/core#detached-turns-experimental) for how they work, and for their limits: a 30-minute cap, claims frozen at enqueue with a user check when the worker starts, no raw ID token in the worker, and App Check, `authorize` and the configuration checks only when the turn is sent. In a detached turn, a tool's `context.auth` has `uid` and `token` but no `rawToken`.
+**`DETACHED_TURNS`** is experimental. With it on, the [configuration checks](#configuration-checks) also require `WORKER_TIMEOUT_SECONDS` to be a whole number from 60 to 1800 and `TIMEOUT_SECONDS` to be 60 or more (the turn route waits up to 40 seconds for the worker). The worker runs at most 10 detached turns of an instance at a time, with no per-user limit, so one user can fill the queue. See [Detached turns](https://github.com/cabljac/firebase-agent-kit/tree/main/packages/core#detached-turns-experimental) for how they work, and for their limits: a 30-minute cap, claims frozen at enqueue with a user check when the worker starts, no raw ID token in the worker, and App Check, `authorize` and the configuration checks only when the turn is sent. In a detached turn, a tool's `context.auth` has `uid` and `token` but no `rawToken`.
 
 ### Configuration checks
 

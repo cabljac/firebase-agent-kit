@@ -2,6 +2,7 @@ import {
   genkit,
   InMemorySessionStore,
   type SessionSnapshot,
+  type SessionStore,
 } from 'genkit/beta';
 import { describe, expect, test } from 'vitest';
 import {
@@ -82,6 +83,27 @@ describe('reapedSnapshot', () => {
     expect(
       reapedSnapshot(row({ parentId: undefined }), undefined, NOW).state,
     ).toEqual({ sessionId: 's1', messages: [], artifacts: [] });
+  });
+});
+
+describe('reapDeadTip re-checks inside the write', () => {
+  test('leaves a row whose worker beat again after the read', async () => {
+    const stale = row({
+      heartbeatAt: new Date(Date.now() - 120_000).toISOString(),
+    });
+    const fresh = { ...stale, heartbeatAt: new Date().toISOString() };
+    const written: unknown[] = [];
+    const store: SessionStore = {
+      getSnapshot: async (opts) =>
+        opts.snapshotId === 'tip' || opts.sessionId ? stale : undefined,
+      saveSnapshot: async (id, mutator) => {
+        const result = mutator(fresh);
+        if (result) written.push(result);
+        return result ? (id ?? null) : null;
+      },
+    };
+    expect(await reapDeadTip(store, 's1', {})).toBe(false);
+    expect(written).toEqual([]);
   });
 });
 
