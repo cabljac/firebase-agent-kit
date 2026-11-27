@@ -1,0 +1,28 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Only the agent's tools write these, through the Admin SDK.
+    match /users/{uid}/{collection}/{docId} {
+      allow read: if request.auth != null
+        && request.auth.uid == uid
+        && collection in ['orders', 'refundRequests'];
+    }
+
+    // The agent kit's sessions, history, locks and runs: server only.
+    match /agent-kit-sessions/{document=**} {
+      allow read, write: if false;
+    }
+    match /agent-kit-sessions-pointers/{document=**} {
+      allow read, write: if false;
+    }
+    match /agent-kit-sessions-shards/{document=**} {
+      allow read, write: if false;
+    }
+    match /agent-kit-locks/{document=**} {
+      allow read, write: if false;
+    }
+    match /agent-kit-runs/{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

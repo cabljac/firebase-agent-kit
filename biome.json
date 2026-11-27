@@ -7,7 +7,14 @@
   },
   "files": {
     "ignoreUnknown": true,
-    "includes": ["**", "!**/SKILL.md"]
+    "includes": [
+      "**",
+      "!**/SKILL.md",
+      "!examples/*/firebase.json",
+      "!examples/*/function-kits/*/source/package.json",
+      "!examples/*/function-kits/*/source/tsconfig.json",
+      "!examples/*/function-kits/*/source/src/index.ts"
+    ]
   },
   "formatter": {
     "enabled": true,

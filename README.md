@@ -26,6 +26,8 @@ firebase functions:kits:install --package @cabljac/firebase-agent-kit
 
 The CLI asks for an instance name (for example `support`), a region and the params. It installs the kit in `function-kits/firebase-agent-kit/source` and adds a kit stanza to `firebase.json`. See [Install](packages/agent-kit/README.md#install) for the non-interactive flags and for a manual install.
 
+To see a whole project after the install and a customisation, with two instances, tools, skills and an interrupt, open [examples/](examples/README.md).
+
 ## Customise
 
 Create the prompt of the instance, `function-kits/firebase-agent-kit/source/prompts/support.prompt`:
