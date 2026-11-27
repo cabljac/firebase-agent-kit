@@ -1,5 +1,3 @@
-import type { Server } from 'node:http';
-import type { AddressInfo } from 'node:net';
 import { fakeToken } from '@genkit-ai/firebase/context';
 import express from 'express';
 import type { HttpsOptions } from 'firebase-functions/v2/https';
@@ -7,6 +5,7 @@ import { GenkitError } from 'genkit';
 import { genkit, InMemorySessionStore } from 'genkit/beta';
 import { onAgentRequest } from '../../src/handler.js';
 import type { AgentRequestOptions, TurnLock } from '../../src/types.js';
+import { listenOnLoopback } from './listen.js';
 
 /** A served `onAgentRequest` function and the lease sizes its lock saw. */
 export interface ServedFunction {
@@ -54,10 +53,7 @@ export async function serveAgentFunction(
   host.use((req, res) =>
     fn(Object.assign(req, { rawBody: Buffer.alloc(0) }), res),
   );
-  const server = await new Promise<Server>((resolve) => {
-    const s = host.listen(0, () => resolve(s));
-  });
-  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const { server, base } = await listenOnLoopback(host);
   return {
     base,
     leases,

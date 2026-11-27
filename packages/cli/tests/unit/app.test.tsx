@@ -30,7 +30,7 @@ afterEach(() => {
 
 async function type(app: TtyApp, ...chunks: string[]) {
   for (const chunk of chunks) {
-    app.stdin.write(chunk);
+    await app.press(chunk);
     await frames.settle();
   }
 }
@@ -42,8 +42,7 @@ test('Enter twice sends the message once', async () => {
   );
   const app = start(session);
   await type(app, 'hello');
-  app.stdin.write('\r');
-  app.stdin.write('\r');
+  await app.press('\r', '\r');
   await frames.settle();
   finish(done('hi'));
   await frames.until(() => expect(app.text()).toContain('hi'));
@@ -57,8 +56,7 @@ test('pressing a twice answers the interrupt once', async () => {
   const app = start(session);
   await type(app, 'pay', '\r');
   await frames.until(() => expect(app.text()).toContain('Approval needed'));
-  app.stdin.write('a');
-  app.stdin.write('a');
+  await app.press('a', 'a');
   await frames.until(() => expect(app.text()).toContain('sent'));
   expect(session.turns).toHaveLength(2);
   expect(session.turns[1]).toEqual({

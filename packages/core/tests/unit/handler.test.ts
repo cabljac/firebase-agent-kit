@@ -1,6 +1,5 @@
 import { createHash } from 'node:crypto';
 import type { Server } from 'node:http';
-import type { AddressInfo } from 'node:net';
 import { logger } from 'firebase-functions';
 import { GenkitError } from 'genkit';
 import {
@@ -17,6 +16,7 @@ import type {
   TurnLease,
   TurnLock,
 } from '../../src/types.js';
+import { listenOnLoopback } from './listen.js';
 
 vi.mock('firebase-functions', () => ({ logger: { error: vi.fn() } }));
 
@@ -101,11 +101,8 @@ async function setup(
       sleep: async () => {},
     },
   );
-  const server = await new Promise<Server>((resolve) => {
-    const s = app.listen(0, () => resolve(s));
-  });
+  const { server, base } = await listenOnLoopback(app);
   servers.push(server);
-  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   const post = (path: string, body: unknown) =>
     fetch(base + path, {
       method: 'POST',
@@ -121,16 +118,13 @@ async function serve(agent: Agent<unknown>, lock: TurnLock) {
     { lock },
     { contextProvider: () => authContext('u1'), sleep: async () => {} },
   );
-  const server = await new Promise<Server>((resolve) => {
-    const s = app.listen(0, () => resolve(s));
-  });
+  const { server, base } = await listenOnLoopback(app);
   servers.push(server);
   const socketClosed = new Promise<void>((resolve) => {
     server.once('connection', (socket) => {
       socket.once('close', () => resolve());
     });
   });
-  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   return { base, socketClosed };
 }
 

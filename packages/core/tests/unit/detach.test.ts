@@ -1,5 +1,4 @@
 import type { Server } from 'node:http';
-import type { AddressInfo } from 'node:net';
 import { genkit, InMemorySessionStore } from 'genkit/beta';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 
@@ -21,6 +20,7 @@ import type {
   TurnLock,
 } from '../../src/types.js';
 import { MemoryRunStore } from './fake-runs.js';
+import { listenOnLoopback } from './listen.js';
 
 const servers: Server[] = [];
 afterEach(async () => {
@@ -127,11 +127,8 @@ async function setup(
       },
     },
   );
-  const server = await new Promise<Server>((resolve) => {
-    const s = app.listen(0, () => resolve(s));
-  });
+  const { server, base } = await listenOnLoopback(app);
   servers.push(server);
-  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   const post = (
     body: unknown,
     headers: Record<string, string> = {},
