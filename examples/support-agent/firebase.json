@@ -1,0 +1,36 @@
+{
+  "firestore": {
+    "rules": "firestore.rules"
+  },
+  "emulators": {
+    "auth": {
+      "port": 9099
+    },
+    "functions": {
+      "port": 5001
+    },
+    "firestore": {
+      "port": 8080
+    },
+    "ui": {
+      "enabled": true
+    },
+    "singleProjectMode": true
+  },
+  "functions": [
+    {
+      "kit": "firebase-agent-kit",
+      "sourcePackage": {
+        "name": "@cabljac/firebase-agent-kit"
+      },
+      "source": "function-kits/firebase-agent-kit/source",
+      "instances": {
+        "support": "function-kits/firebase-agent-kit/config-support",
+        "sales": "function-kits/firebase-agent-kit/config-sales"
+      },
+      "predeploy": [
+        "npm --prefix \"$RESOURCE_DIR\" run build"
+      ]
+    }
+  ]
+}
