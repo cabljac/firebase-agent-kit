@@ -6,6 +6,8 @@ import {
 } from '@cabljac/firebase-agent-kit-core';
 import { initializeApp } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
+import { defineString } from 'firebase-functions/params';
+import { setGlobalOptions } from 'firebase-functions/v2';
 import { onTaskDispatched } from 'firebase-functions/v2/tasks';
 import { genkit, type SessionStore } from 'genkit/beta';
 
@@ -145,3 +147,15 @@ export const brokenAgent = onAgentRequest(agent, {
   httpsOptions: { timeoutSeconds: 120 },
   detach: defineDetachedTurns({ queue: 'missingWorker', store }),
 });
+
+// Applies only to the functions defined below, so it must stay last.
+setGlobalOptions({
+  region: defineString('FUNCTION_DEFAULT_REGION', { default: 'europe-west1' }),
+});
+
+const regional = defineDetachedTurns({ queue: 'regionalWorker', store });
+export const regionalAgent = onAgentRequest(agent, {
+  httpsOptions: { timeoutSeconds: 120 },
+  detach: regional,
+});
+export const regionalWorker = onAgentTask(agent, regional);

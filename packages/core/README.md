@@ -202,7 +202,7 @@ const snapshot = await task.wait(); // or task.poll(), or task.abort()
 | `lock`           | a `FirestoreTurnLock` | The turn lock for every turn of the agent. Do not also set the `lock` option of `onAgentRequest`.                                       |
 | `runs`           | `agent-kit-runs`      | `{ collection, firestore }` for the run documents.                                                                                      |
 
-`onAgentTask(agent, detach, taskOptions?)` takes the other task queue options (memory, region, `rateLimits`, ...) as the third argument. It always sets `retryConfig.maxAttempts` to 1, and `rateLimits.maxConcurrentDispatches` defaults to 10.
+`onAgentTask(agent, detach, taskOptions?)` takes the other task queue options (memory, region, `rateLimits`, ...) as the third argument. It always sets `retryConfig.maxAttempts` to 1, and `rateLimits.maxConcurrentDispatches` defaults to 10. The worker must run in the region of the turn route (the first region when the route has a list). Set the region with `setGlobalOptions`, or give both functions the same region.
 
 **How it works.** The turn route runs authentication, App Check, `authorize`, the input check and `beforeTurn` as for any turn. Then it:
 
