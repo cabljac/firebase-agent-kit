@@ -490,6 +490,7 @@ The main entry reads the instance id and defines the params when it loads, so us
 - **Abort of another user's turn does nothing.** `/abort` with the snapshot id of another user answers 200 with no `status`, and the turn continues. The client's `abort()` resolves `undefined`.
 - **No multipart tools.** `ai.defineTool` takes no `multipart: true` config.
 - **One model provider.** The kit registers only the Vertex AI plugin. Use `ai.defineModel` for anything else.
+- **Upstream workarounds.** The kit patches and reads some Genkit internals. See [Upstream workarounds](https://github.com/cabljac/firebase-agent-kit/tree/main/packages/core#upstream-workarounds).
 
 ## Reporting bugs
 

@@ -95,6 +95,10 @@ Terminals send different bytes for some keys. Cmd+Backspace works where the term
 
 Requires Node.js 22.12 or later.
 
+## Limits
+
+- **Two credential types.** For the API key lookup only (not for sign-in to the agent), the client reads Application Default Credentials itself, to keep the bundle small. It supports `authorized_user` (from `gcloud auth application-default login`) and `service_account` keys. It does not support other types, such as `external_account` (workload identity federation) or impersonated service account credentials. With such credentials, a terminal prompts for the API key. Without a terminal, the client exits and asks for `--api-key`.
+
 ## License
 
 Apache-2.0
